@@ -50,7 +50,7 @@ struct SettingsView: View {
     }
 
     private func signOut() {
-        UserDefaults.standard.removeObject(forKey: AppStorageKey.userEmail)
+        AuthService.shared.signOut()
         hasOnboarded = false
     }
 }

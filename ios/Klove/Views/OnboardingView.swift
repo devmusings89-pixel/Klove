@@ -1,4 +1,5 @@
 import SwiftUI
+import AuthenticationServices
 
 /// First-run flow: welcome → value prop → identify → connect data sources.
 /// Completion is signaled by setting the `hasOnboarded` flag, which the app root observes.
@@ -85,11 +86,35 @@ struct OnboardingView: View {
                 Text(error).font(.footnote).foregroundStyle(.red)
             }
 
-            Label("Sign in with Apple is coming soon.", systemImage: "applelogo")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+            HStack { line; Text("or").font(.caption).foregroundStyle(.secondary); line }
+                .padding(.vertical, 4)
+
+            SignInWithAppleButton(.signIn) { req in
+                AuthService.shared.configure(req)
+            } onCompletion: { result in
+                AuthService.shared.handle(result)
+            }
+            .signInWithAppleButtonStyle(.black)
+            .frame(height: 48)
+            .clipShape(Capsule())
+
+            Button { Task { await AuthService.shared.signInWithGoogle() } } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "globe").font(.headline)
+                    Text("Continue with Google").font(.headline)
+                }
+                .frame(maxWidth: .infinity).frame(height: 48)
+                .foregroundStyle(.primary)
+                .overlay(Capsule().stroke(Color(.systemGray3), lineWidth: 1))
+            }
+
+            if let authError = AuthService.shared.errorMessage {
+                Text(authError).font(.footnote).foregroundStyle(.red)
+            }
         }
     }
+
+    private var line: some View { Rectangle().fill(Color(.systemGray4)).frame(height: 1) }
 
     private var connect: some View {
         VStack(alignment: .leading, spacing: 16) {

@@ -145,7 +145,9 @@ struct APIClient {
 
     // MARK: - Transport
 
-    /// Mock-mode identity: backend resolves the user from this header until Supabase Auth lands.
+    /// Bearer token (Supabase JWT) when signed in; preferred over the dev email header.
+    private var authToken: String { UserDefaults.standard.string(forKey: AppStorageKey.authToken) ?? "" }
+    /// Fallback identity: backend resolves the user from this header when there's no bearer token.
     private var userEmail: String { UserDefaults.standard.string(forKey: AppStorageKey.userEmail) ?? "" }
 
     func get<R: Decodable>(_ path: String) async throws -> R {
@@ -176,7 +178,11 @@ struct APIClient {
 
     func send<R: Decodable>(_ req: URLRequest) async throws -> R {
         var req = req
-        if !userEmail.isEmpty { req.setValue(userEmail, forHTTPHeaderField: "x-user-email") }
+        if !authToken.isEmpty {
+            req.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+        } else if !userEmail.isEmpty {
+            req.setValue(userEmail, forHTTPHeaderField: "x-user-email")
+        }
         let data: Data
         let response: URLResponse
         do {
