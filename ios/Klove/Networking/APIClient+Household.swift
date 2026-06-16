@@ -49,7 +49,28 @@ extension APIClient {
     func revokeConsent(_ userId: String) async throws -> EmptyResponse {
         try await post("/members/\(userId)/revoke", body: EmptyDict())
     }
+
+    /// Edit a member's details (name / relationship).
+    @discardableResult
+    func updateMember(_ userId: String, displayName: String?, relationship: String?) async throws -> EmptyResponse {
+        try await patch("/members/\(userId)", body: UpdateMemberBody(displayName: displayName, relationship: relationship))
+    }
+
+    /// Remove a member from the household (drops membership + revokes consent).
+    @discardableResult
+    func removeMember(_ userId: String) async throws -> EmptyResponse {
+        try await delete("/members/\(userId)")
+    }
+
+    /// Change the operator's consent scope over a member (access level + categories).
+    @discardableResult
+    func updateConsent(_ userId: String, accessLevel: String, categories: [String]) async throws -> EmptyResponse {
+        try await patch("/members/\(userId)/consent", body: UpdateConsentBody(accessLevel: accessLevel, categories: categories))
+    }
 }
+
+private struct UpdateMemberBody: Encodable { let displayName: String?; let relationship: String? }
+private struct UpdateConsentBody: Encodable { let accessLevel: String; let categories: [String] }
 
 private struct AddMemberBody: Encodable {
     let displayName: String

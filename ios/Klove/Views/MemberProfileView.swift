@@ -9,11 +9,13 @@ struct MemberProfileView: View {
 
     @State private var detail: MemberDetail?
     @State private var loading = true
-    @State private var showInvite = false
-    @State private var showBook = false
+    @State private var activeSheet: ProfileSheet?
     @State private var confirmRevoke = false
+    @State private var confirmRemove = false
 
     private let api = APIClient()
+
+    private enum ProfileSheet: String, Identifiable { case invite, book, edit, editConsent; var id: String { rawValue } }
 
     var body: some View {
         ScrollView {
@@ -34,19 +36,57 @@ struct MemberProfileView: View {
         .background(Theme.background.ignoresSafeArea())
         .navigationTitle(detail?.displayName ?? "Member")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $showInvite) {
-            InviteMemberView(memberId: memberId, memberName: detail?.displayName ?? "this member").environment(store)
-        }
-        .sheet(isPresented: $showBook) {
-            BookAppointmentView(memberId: memberId, memberName: detail?.displayName ?? "this member")
+        .sheet(item: $activeSheet) { sheet in sheetContent(sheet) }
+        .toolbar { toolbarMenu }
+        .confirmationDialog("Remove \(detail?.displayName ?? "this member") from your household?",
+                            isPresented: $confirmRemove, titleVisibility: .visible) {
+            Button("Remove", role: .destructive) { Task { await remove() } }
         }
         .task { await load() }
+    }
+
+    @ViewBuilder private func sheetContent(_ sheet: ProfileSheet) -> some View {
+        switch sheet {
+        case .invite:
+            InviteMemberView(memberId: memberId, memberName: detail?.displayName ?? "this member").environment(store)
+        case .book:
+            BookAppointmentView(memberId: memberId, memberName: detail?.displayName ?? "this member")
+        case .edit:
+            if let d = detail {
+                EditMemberView(memberId: memberId, name: d.displayName ?? "", relationship: d.relationship,
+                               onSaved: { Task { await load(); await store.load() } })
+            }
+        case .editConsent:
+            if let d = detail {
+                EditConsentView(memberId: memberId, consent: d.consent, onSaved: { Task { await load() } })
+            }
+        }
+    }
+
+    @ToolbarContentBuilder private var toolbarMenu: some ToolbarContent {
+        if let d = detail, !d.isOperator {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button { activeSheet = .edit } label: { Label("Edit details", systemImage: "pencil") }
+                    if d.consent.status == "active" {
+                        Button { activeSheet = .editConsent } label: { Label("Edit sharing", systemImage: "slider.horizontal.3") }
+                    }
+                    Button(role: .destructive) { confirmRemove = true } label: { Label("Remove from household", systemImage: "trash") }
+                } label: { Image(systemName: "ellipsis.circle") }
+            }
+        }
     }
 
     private func load() async {
         loading = true
         defer { loading = false }
         detail = try? await api.getMember(memberId)
+    }
+
+    private func remove() async {
+        try? await api.removeMember(memberId)
+        await store.load()
+        dismiss()
     }
 
     private func identity(_ d: MemberDetail) -> some View {
@@ -84,7 +124,7 @@ struct MemberProfileView: View {
                 careRow(icon: "list.clipboard.fill", title: "Prepare for a visit", subtitle: "One-page brief + questions")
             }
             Divider().padding(.leading, 52)
-            Button { showBook = true } label: {
+            Button { activeSheet = .book } label: {
                 careRow(icon: "calendar.badge.plus", title: "Book a visit", subtitle: "Klove schedules it for you")
             }
             .buttonStyle(.plain)
@@ -128,7 +168,7 @@ struct MemberProfileView: View {
     @ViewBuilder private func manageSection(_ d: MemberDetail) -> some View {
         VStack(spacing: 12) {
             if d.consent.status == "pending" {
-                Button { showInvite = true } label: {
+                Button { activeSheet = .invite } label: {
                     Label("Send invite", systemImage: "paperplane.fill")
                         .frame(maxWidth: .infinity).padding(.vertical, 12)
                 }

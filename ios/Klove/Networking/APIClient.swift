@@ -164,6 +164,13 @@ struct APIClient {
         try await sendBody(path, method: "PATCH", body: body)
     }
 
+    @discardableResult
+    func delete<R: Decodable>(_ path: String) async throws -> R {
+        var req = URLRequest(url: baseURL.appendingPathComponent(path))
+        req.httpMethod = "DELETE"
+        return try await send(req)
+    }
+
     private func put<B: Encodable, R: Decodable>(_ path: String, body: B) async throws -> R {
         try await sendBody(path, method: "PUT", body: body)
     }

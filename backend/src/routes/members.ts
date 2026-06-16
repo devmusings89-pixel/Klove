@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { prisma } from "../db.js";
 import { requireUser } from "../services/auth.js";
 import { ensureHousehold, parseCategories } from "../services/household.js";
+import { audit } from "../services/audit.js";
 
 const MEMBER_TYPES = new Set(["minor", "aging_parent", "consenting_adult"]);
 
@@ -120,4 +121,22 @@ export async function memberRoutes(app: FastifyInstance) {
       return reply.send({ ok: true });
     },
   );
+
+  // Remove a member from the household: drop the membership + revoke the operator's grant. The
+  // member's User/clinical rows are retained (not hard-deleted) to avoid orphaning records.
+  app.delete<{ Params: { id: string } }>("/members/:id", { preHandler: requireUser }, async (req, reply) => {
+    const operatorUserId = req.user!.id;
+    if (req.params.id === operatorUserId) return reply.code(400).send({ error: "cannot_remove_self" });
+    const householdId = await ensureHousehold(operatorUserId);
+    const membership = await prisma.householdMembership.findFirst({ where: { householdId, userId: req.params.id } });
+    if (!membership) return reply.code(404).send({ error: "not_found" });
+
+    await prisma.householdMembership.delete({ where: { id: membership.id } });
+    await prisma.consentGrant.updateMany({
+      where: { granteeUserId: operatorUserId, subjectUserId: req.params.id, status: { not: "revoked" } },
+      data: { status: "revoked", revokedAt: new Date() },
+    });
+    await audit(operatorUserId, "member_removed", req.params.id);
+    return reply.send({ ok: true });
+  });
 }
