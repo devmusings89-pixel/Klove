@@ -90,6 +90,27 @@ export const gmailSource: DataSource = {
     });
     return artifacts;
   },
+
+  /**
+   * Gmail Pub/Sub push: the notification only carries { emailAddress, historyId }. We use it as a
+   * signal to pull — find the connection for that mailbox and run the normal health-mail sync.
+   */
+  async handleWebhook(payload): Promise<{ userId: string; artifacts: RawArtifact[] }> {
+    const data = (payload as { message?: { data?: string } })?.message?.data;
+    if (!data) return { userId: "", artifacts: [] };
+    let emailAddress = "";
+    try {
+      emailAddress = (JSON.parse(Buffer.from(data, "base64").toString("utf8")) as { emailAddress?: string }).emailAddress ?? "";
+    } catch {
+      return { userId: "", artifacts: [] };
+    }
+    const conn = await prisma.dataSourceConnection.findFirst({
+      where: { type: "gmail", externalAccountId: emailAddress, status: "connected" },
+    });
+    if (!conn) return { userId: "", artifacts: [] };
+    const artifacts = await gmailSource.sync(conn);
+    return { userId: conn.userId, artifacts };
+  },
 };
 
 /** Return a valid access token, refreshing (and persisting) it if expired. */

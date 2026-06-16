@@ -12,6 +12,8 @@ struct MemberProfileView: View {
     @State private var activeSheet: ProfileSheet?
     @State private var confirmRevoke = false
     @State private var confirmRemove = false
+    @State private var showPromote = false
+    @State private var promoteEmail = ""
 
     private let api = APIClient()
 
@@ -42,7 +44,21 @@ struct MemberProfileView: View {
                             isPresented: $confirmRemove, titleVisibility: .visible) {
             Button("Remove", role: .destructive) { Task { await remove() } }
         }
+        .alert("Give \(detail?.displayName ?? "this member") a login", isPresented: $showPromote) {
+            TextField("their@email.com", text: $promoteEmail)
+            Button("Cancel", role: .cancel) {}
+            Button("Send") { Task { await promote() } }
+        } message: {
+            Text("They'll be able to sign in with this email and manage their own records.")
+        }
         .task { await load() }
+    }
+
+    private func promote() async {
+        let email = promoteEmail.trimmingCharacters(in: .whitespaces)
+        guard email.contains("@") else { return }
+        try? await api.promoteMember(memberId, email: email)
+        await load()
     }
 
     @ViewBuilder private func sheetContent(_ sheet: ProfileSheet) -> some View {
@@ -70,6 +86,9 @@ struct MemberProfileView: View {
                     Button { activeSheet = .edit } label: { Label("Edit details", systemImage: "pencil") }
                     if d.consent.status == "active" {
                         Button { activeSheet = .editConsent } label: { Label("Edit sharing", systemImage: "slider.horizontal.3") }
+                    }
+                    if d.managed {
+                        Button { showPromote = true } label: { Label("Give them a login", systemImage: "person.badge.key") }
                     }
                     Button(role: .destructive) { confirmRemove = true } label: { Label("Remove from household", systemImage: "trash") }
                 } label: { Image(systemName: "ellipsis.circle") }

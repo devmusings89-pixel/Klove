@@ -48,7 +48,7 @@ struct MemberTimelineView: View {
     }
 }
 
-private struct TimelineRow: View {
+struct TimelineRow: View {
     let entry: TimelineEntry
 
     var body: some View {

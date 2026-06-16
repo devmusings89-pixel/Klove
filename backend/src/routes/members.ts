@@ -122,6 +122,26 @@ export async function memberRoutes(app: FastifyInstance) {
     },
   );
 
+  // Promote a managed member (minor/aging parent) to a login: attach an email so they can sign in
+  // and own their records. The operator must have operate access; email must be unique.
+  app.post<{ Params: { id: string }; Body: { email: string } }>("/members/:id/promote", { preHandler: requireUser }, async (req, reply) => {
+    const operatorUserId = req.user!.id;
+    const householdId = await ensureHousehold(operatorUserId);
+    const email = req.body?.email?.trim().toLowerCase();
+    if (!email || !email.includes("@")) return reply.code(400).send({ error: "valid email required" });
+
+    const membership = await prisma.householdMembership.findFirst({ where: { householdId, userId: req.params.id }, include: { user: true } });
+    if (!membership) return reply.code(404).send({ error: "not_found" });
+    if (!membership.user.managed) return reply.code(409).send({ error: "already_has_login" });
+
+    const taken = await prisma.user.findUnique({ where: { email } });
+    if (taken && taken.id !== req.params.id) return reply.code(409).send({ error: "email_in_use" });
+
+    await prisma.user.update({ where: { id: req.params.id }, data: { email, managed: false } });
+    await audit(operatorUserId, "member_promoted", req.params.id, "attached login");
+    return reply.send({ ok: true, email });
+  });
+
   // Remove a member from the household: drop the membership + revoke the operator's grant. The
   // member's User/clinical rows are retained (not hard-deleted) to avoid orphaning records.
   app.delete<{ Params: { id: string } }>("/members/:id", { preHandler: requireUser }, async (req, reply) => {

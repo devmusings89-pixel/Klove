@@ -67,6 +67,12 @@ extension APIClient {
     func updateConsent(_ userId: String, accessLevel: String, categories: [String]) async throws -> EmptyResponse {
         try await patch("/members/\(userId)/consent", body: UpdateConsentBody(accessLevel: accessLevel, categories: categories))
     }
+
+    /// Promote a managed member (minor/aging parent) to a real login by attaching an email.
+    @discardableResult
+    func promoteMember(_ userId: String, email: String) async throws -> EmptyResponse {
+        try await post("/members/\(userId)/promote", body: ["email": email])
+    }
 }
 
 private struct UpdateMemberBody: Encodable { let displayName: String?; let relationship: String? }

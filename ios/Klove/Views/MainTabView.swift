@@ -32,7 +32,7 @@ struct MainTabView: View {
                     .tabItem { Label("Family", systemImage: "person.2.fill") }
                     .tag(KloveTab.family)
 
-                NavigationStack { HealthRecordsListView() }
+                NavigationStack { RecordsView() }
                     .tabItem { Label("Records", systemImage: "list.bullet.clipboard.fill") }
                     .tag(KloveTab.records)
 
