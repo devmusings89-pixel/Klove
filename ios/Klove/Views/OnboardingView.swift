@@ -33,7 +33,52 @@ struct OnboardingView: View {
         case .welcome: welcome
         case .value: value
         case .identify: identify
+        case .family: family
         case .connect: connect
+        case .channels: channels
+        }
+    }
+
+    private var family: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Who are you caring for?").font(.largeTitle.bold())
+            Text("Add the family members you coordinate care for. You can add more (or invite adults) later.")
+                .foregroundStyle(.secondary)
+            HStack {
+                TextField("Name (e.g. Dad, Ava)", text: $model.newMemberName).textInputAutocapitalization(.words)
+                    .padding(10).background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                Button { Task { await model.addMember() } } label: { Image(systemName: "plus.circle.fill").font(.title2) }
+                    .disabled(model.newMemberName.trimmingCharacters(in: .whitespaces).isEmpty || model.addingMember)
+            }
+            Picker("Type", selection: $model.newMemberType) {
+                ForEach(NewMemberType.allCases) { Text($0.title).tag($0) }
+            }.pickerStyle(.segmented)
+            if !model.addedMembers.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(model.addedMembers, id: \.self) { name in
+                        Label(name, systemImage: "checkmark.circle.fill").foregroundStyle(.tint)
+                    }
+                }.padding(.top, 4)
+            }
+            Text("You can skip this and add family anytime from the Family tab.")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    private var channels: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("How should Klove reach you?").font(.largeTitle.bold())
+            Text("Klove sends a calm nudge only when something needs you — never a pile of unread.")
+                .foregroundStyle(.secondary)
+            Toggle(isOn: $model.pushEnabled) {
+                Label("Push notifications", systemImage: "bell.badge.fill")
+            }
+            .padding(12).background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Text & WhatsApp — coming soon", systemImage: "message")
+                Label("Email digest — coming soon", systemImage: "envelope")
+            }
+            .font(.subheadline).foregroundStyle(.secondary)
         }
     }
 

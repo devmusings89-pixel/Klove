@@ -5,7 +5,7 @@ import Foundation
 final class OnboardingModel {
     /// Ordered onboarding steps.
     enum Step: Int, CaseIterable {
-        case welcome, value, identify, connect
+        case welcome, value, identify, family, connect, channels
 
         var isLast: Bool { self == Step.allCases.last }
     }
@@ -16,6 +16,16 @@ final class OnboardingModel {
 
     /// Source connection is shared with Settings via SourcesModel.
     let sources = SourcesModel()
+    private let api = APIClient()
+
+    // Family step
+    var newMemberName = ""
+    var newMemberType: NewMemberType = .minor
+    var addedMembers: [String] = []
+    var addingMember = false
+
+    // Channels step
+    var pushEnabled = true
 
     // MARK: - Navigation
 
@@ -24,6 +34,18 @@ final class OnboardingModel {
         if let next = Step(rawValue: step.rawValue + 1) {
             step = next
             if step == .connect { Task { await sources.loadSources() } }
+        }
+    }
+
+    /// Add a family member during onboarding (operator identity was set in the identify step).
+    func addMember() async {
+        let name = newMemberName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        addingMember = true
+        defer { addingMember = false }
+        if (try? await api.addMember(displayName: name, type: newMemberType)) != nil {
+            addedMembers.append(name)
+            newMemberName = ""
         }
     }
 
