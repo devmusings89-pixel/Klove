@@ -86,7 +86,9 @@ export const config = {
   aggregator: {
     apiKey: process.env.AGGREGATOR_API_KEY ?? "",
     webhookSecret: process.env.AGGREGATOR_WEBHOOK_SECRET ?? "",
-    baseUrl: process.env.AGGREGATOR_BASE_URL ?? "",
+    baseUrl: process.env.AGGREGATOR_BASE_URL ?? "https://api.metriport.com",
+    facilityId: process.env.AGGREGATOR_FACILITY_ID ?? "",
+    connectUrl: process.env.AGGREGATOR_CONNECT_URL ?? "https://connect.metriport.com",
   },
 
   // 32-byte key (base64/hex/utf8) for envelope-encrypting OAuth tokens at rest.
