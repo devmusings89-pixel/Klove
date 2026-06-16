@@ -38,8 +38,10 @@ struct BookingOutcome: Decodable {
     let appointmentId: String?
     let confirmation: String?
     let startsAt: String?
+    let priceCents: Int?
 
     var isConfirmed: Bool { status == "confirmed" }
+    var needsPayment: Bool { status == "payment_required" }
 
     var whenDisplay: String {
         guard let s = startsAt, let d = ISO8601DateFormatter().date(from: s) else { return "soon" }

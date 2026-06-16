@@ -32,13 +32,14 @@ export interface BookingInput {
 }
 
 export interface BookingOutcome {
-  status: "confirmed" | "in_progress";
+  status: "confirmed" | "in_progress" | "payment_required";
   taskId: string;
   title: string;
   provider: string | null;
   appointmentId?: string;
   confirmation?: string;
   startsAt?: string;
+  priceCents?: number;
 }
 
 function confirmationCode(): string {
@@ -56,6 +57,19 @@ export async function bookAppointment(
   householdId: string,
   input: BookingInput,
 ): Promise<BookingOutcome> {
+  // Payment gate: when a concierge fee is configured and Stripe is live, require payment before we
+  // contact the office. Default (price 0) is operator-authorized + free. The PaymentSheet + confirm
+  // loop is the remaining live step (needs a Stripe key + a set price).
+  if (config.conciergePriceCents > 0 && enabled.stripe()) {
+    return {
+      status: "payment_required",
+      taskId: "",
+      title: input.reason.trim() || "Appointment",
+      provider: input.provider?.trim() || null,
+      priceCents: config.conciergePriceCents,
+    };
+  }
+
   const hasContact = Boolean(input.phone || input.website || input.email);
   // With Google Places + a provider name, the orchestrator can look up the office itself — so an
   // office name alone is enough to book live.

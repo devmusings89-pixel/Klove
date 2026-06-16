@@ -13,6 +13,9 @@ export const config = {
   publicBaseUrl: process.env.PUBLIC_BASE_URL ?? "http://localhost:8080",
 
   sessionPriceCents: num("SESSION_PRICE_CENTS", 500),
+  // Concierge booking fee. 0 = free (operator-authorized, the default). When > 0 AND Stripe is
+  // configured, /members/:id/book requires payment before Klove contacts the office.
+  conciergePriceCents: num("CONCIERGE_PRICE_CENTS", 0),
   maxCallsPerSession: num("MAX_CALLS_PER_SESSION", 3),
   minutesCapPerSession: num("MINUTES_CAP_PER_SESSION", 60),
   // Off by default so dev/mock runs aren't blocked outside 9–5; turn on in prod.

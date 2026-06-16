@@ -86,27 +86,40 @@ struct BookAppointmentView: View {
         }
     }
 
+    @ViewBuilder
     private func confirmation(_ o: BookingOutcome) -> some View {
         VStack(spacing: 14) {
-            Image(systemName: o.isConfirmed ? "checkmark.seal.fill" : "phone.arrow.up.right.fill")
-                .font(.system(size: 52)).foregroundStyle(o.isConfirmed ? Theme.handled : Theme.accent)
-            Text(o.isConfirmed ? "Done — it's booked" : "Klove is on it")
-                .font(.title2.weight(.semibold)).foregroundStyle(Theme.ink)
-            Text("\(o.title)\(o.provider.map { " with \($0)" } ?? "")")
-                .font(.subheadline).foregroundStyle(Theme.ink).multilineTextAlignment(.center)
-            if o.isConfirmed {
-                Text("\(o.whenDisplay)\(o.confirmation.map { " · Confirmation \($0)" } ?? "")")
-                    .font(.caption).foregroundStyle(Theme.inkSecondary)
-                Text("You'll find it in Today and on \(memberName)'s timeline.")
-                    .font(.caption).foregroundStyle(Theme.inkSecondary).padding(.top, 4)
+            if o.needsPayment {
+                Image(systemName: "creditcard.fill").font(.system(size: 52)).foregroundStyle(Theme.accent)
+                Text("Concierge fee").font(.title2.weight(.semibold)).foregroundStyle(Theme.ink)
+                Text("This booking has a \(Self.price(o.priceCents)) concierge fee. Payment is required before Klove contacts the office.")
+                    .font(.subheadline).foregroundStyle(Theme.inkSecondary).multilineTextAlignment(.center).padding(.horizontal, 8)
+                Text("(Set up Stripe to enable in-app payment.)").font(.caption).foregroundStyle(Theme.inkSecondary)
             } else {
-                Text("Klove is contacting the office now. You'll get a confirmation in Today & Actions when it's booked.")
-                    .font(.caption).foregroundStyle(Theme.inkSecondary).multilineTextAlignment(.center).padding(.top, 4)
+                Image(systemName: o.isConfirmed ? "checkmark.seal.fill" : "phone.arrow.up.right.fill")
+                    .font(.system(size: 52)).foregroundStyle(o.isConfirmed ? Theme.handled : Theme.accent)
+                Text(o.isConfirmed ? "Done — it's booked" : "Klove is on it")
+                    .font(.title2.weight(.semibold)).foregroundStyle(Theme.ink)
+                Text("\(o.title)\(o.provider.map { " with \($0)" } ?? "")")
+                    .font(.subheadline).foregroundStyle(Theme.ink).multilineTextAlignment(.center)
+                if o.isConfirmed {
+                    Text("\(o.whenDisplay)\(o.confirmation.map { " · Confirmation \($0)" } ?? "")")
+                        .font(.caption).foregroundStyle(Theme.inkSecondary)
+                    Text("You'll find it in Today and on \(memberName)'s timeline.")
+                        .font(.caption).foregroundStyle(Theme.inkSecondary).padding(.top, 4)
+                } else {
+                    Text("Klove is contacting the office now. You'll get a confirmation in Today & Actions when it's booked.")
+                        .font(.caption).foregroundStyle(Theme.inkSecondary).multilineTextAlignment(.center).padding(.top, 4)
+                }
             }
         }
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background.ignoresSafeArea())
+    }
+
+    private static func price(_ cents: Int?) -> String {
+        String(format: "$%.2f", Double(cents ?? 0) / 100)
     }
 
     private func book() async {
