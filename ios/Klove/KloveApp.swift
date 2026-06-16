@@ -4,6 +4,7 @@ import SwiftUI
 struct KloveApp: App {
     @AppStorage(AppStorageKey.hasOnboarded) private var hasOnboarded = false
     @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
+    @State private var invites = InviteCoordinator.shared
 
     var body: some Scene {
         WindowGroup {
@@ -17,6 +18,10 @@ struct KloveApp: App {
             }
             // Warm Klove accent everywhere (onboarding, sheets, alerts) — never health-app blue.
             .tint(Theme.accent)
+            .onOpenURL { invites.handle($0) }
+            .sheet(item: $invites.pending) { invite in
+                AcceptInviteView(token: invite.token)
+            }
         }
     }
 }
