@@ -4,7 +4,7 @@
 // as things to discuss with a provider — never as diagnosis.
 
 import Anthropic from "@anthropic-ai/sdk";
-import { config, enabled } from "../config.js";
+import { runTool, llmAvailable } from "./llm-tool.js";
 import { prisma } from "../db.js";
 import { toJson } from "./json.js";
 
@@ -73,7 +73,7 @@ export async function runAnalysis(userId: string, generatedByJobId?: string): Pr
   }
 
   // 2) LLM cross-diagnosis pass (only when configured).
-  if (enabled.healthExtraction() && (conditions.length || observations.length)) {
+  if (llmAvailable() && (conditions.length || observations.length)) {
     try {
       drafts.push(...(await llmAlerts(observations, conditions, medications)));
     } catch (err) {
@@ -137,20 +137,11 @@ async function llmAlerts(
     ...observations.slice(0, 60).map((o) => `- ${o.display} [${o.id}] = ${o.valueNum ?? "?"} ${o.unit ?? ""} @ ${o.effectiveAt?.toISOString().slice(0, 10) ?? "?"}`),
   ].join("\n");
 
-  const client = new Anthropic({ apiKey: config.anthropicApiKey });
-  const resp = await client.messages.create({
-    model: config.webAgent.model || "claude-opus-4-8",
-    max_tokens: 2000,
+  const out = await runTool<{ alerts?: DraftAlert[] }>({
     system: "You analyze a patient's longitudinal records to surface things to be aware of. Be conservative.",
-    tools: [ALERT_TOOL],
-    tool_choice: { type: "tool", name: "emit_alerts" },
-    messages: [{ role: "user", content: `Here are the patient's records:\n\n${summary}\n\nEmit any well-supported alerts.` }],
+    content: `Here are the patient's records:\n\n${summary}\n\nEmit any well-supported alerts.`,
+    tool: { name: ALERT_TOOL.name, description: ALERT_TOOL.description ?? "", input_schema: ALERT_TOOL.input_schema as Record<string, unknown> },
+    maxTokens: 2000,
   });
-  for (const block of resp.content) {
-    if (block.type === "tool_use" && block.name === "emit_alerts") {
-      const out = block.input as { alerts?: DraftAlert[] };
-      return (out.alerts ?? []).map((a) => ({ ...a, relatedResourceIds: a.relatedResourceIds ?? [] }));
-    }
-  }
-  return [];
+  return (out?.alerts ?? []).map((a) => ({ ...a, relatedResourceIds: a.relatedResourceIds ?? [] }));
 }

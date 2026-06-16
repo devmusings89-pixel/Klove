@@ -5,7 +5,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import type { HealthDocument } from "@prisma/client";
-import { config, enabled } from "../config.js";
+import { runTool, llmAvailable } from "./llm-tool.js";
 import { getObject } from "./storage.js";
 import type { ExtractedBundle } from "./fhir-map.js";
 
@@ -127,28 +127,19 @@ const SYSTEM =
 
 /** Extract a normalized bundle from a document's stored bytes. */
 export async function extractDocument(doc: HealthDocument): Promise<ExtractedBundle> {
-  if (!enabled.healthExtraction()) return mockBundle(doc);
+  if (!llmAvailable()) return mockBundle(doc);
   if (!doc.storagePath) throw new Error(`document ${doc.id} has no storagePath`);
 
   const bytes = await getObject(doc.storagePath);
   const content = buildContent(doc.mimeType, bytes);
 
-  const client = new Anthropic({ apiKey: config.anthropicApiKey });
-  const resp = await client.messages.create({
-    model: config.webAgent.model || "claude-opus-4-8",
-    max_tokens: 4000,
+  const result = await runTool<ExtractedBundle>({
     system: SYSTEM,
-    tools: [EXTRACT_TOOL],
-    tool_choice: { type: "tool", name: "extract_health_data" },
-    messages: [{ role: "user", content }],
+    content,
+    tool: { name: EXTRACT_TOOL.name, description: EXTRACT_TOOL.description ?? "", input_schema: EXTRACT_TOOL.input_schema as Record<string, unknown> },
+    maxTokens: 4000,
   });
-
-  for (const block of resp.content) {
-    if (block.type === "tool_use" && block.name === "extract_health_data") {
-      return block.input as ExtractedBundle;
-    }
-  }
-  return { isHealthRelated: false };
+  return result ?? { isHealthRelated: false };
 }
 
 /** Build the Claude message content for the document's media type. */

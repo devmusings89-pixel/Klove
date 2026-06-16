@@ -3,7 +3,7 @@
 // questions are discussion prompts the operator edits, never medical advice.
 
 import Anthropic from "@anthropic-ai/sdk";
-import { config, enabled } from "../config.js";
+import { runTool, llmAvailable } from "./llm-tool.js";
 import { prisma } from "../db.js";
 import { buildSummary, buildTimeline, type GraphSummary, type TimelineEntry } from "./graph.js";
 
@@ -48,24 +48,15 @@ async function llmQuestions(summary: GraphSummary, apptTitle: string): Promise<s
     `Record counts: ${JSON.stringify(summary.counts)}`,
   ].join("\n");
 
-  const client = new Anthropic({ apiKey: config.anthropicApiKey });
-  const resp = await client.messages.create({
-    model: config.webAgent.model || "claude-opus-4-8",
-    max_tokens: 1000,
+  const out = await runTool<{ questions?: string[] }>({
     system:
       "You help a caregiver prepare for a medical appointment. Suggest grounded, specific questions to ask. " +
       "Be conservative; never diagnose or recommend treatment. Output 4-6 short questions.",
-    tools: [QUESTIONS_TOOL],
-    tool_choice: { type: "tool", name: "suggest_questions" },
-    messages: [{ role: "user", content: `Patient context:\n\n${ctx}\n\nSuggest questions to bring to this visit.` }],
+    content: `Patient context:\n\n${ctx}\n\nSuggest questions to bring to this visit.`,
+    tool: { name: QUESTIONS_TOOL.name, description: QUESTIONS_TOOL.description ?? "", input_schema: QUESTIONS_TOOL.input_schema as Record<string, unknown> },
+    maxTokens: 1000,
   });
-  for (const block of resp.content) {
-    if (block.type === "tool_use" && block.name === "suggest_questions") {
-      const out = block.input as { questions?: string[] };
-      return (out.questions ?? []).slice(0, 6);
-    }
-  }
-  return [];
+  return (out?.questions ?? []).slice(0, 6);
 }
 
 /** Assemble the one-page brief for a member's appointment (or a general brief if none given). */
@@ -82,7 +73,7 @@ export async function buildBrief(userId: string, appointmentId?: string): Promis
   const saved = appointment?.notes ? safeParseQuestions(appointment.notes) : null;
   if (saved && saved.length) {
     questions = saved;
-  } else if (enabled.healthExtraction()) {
+  } else if (llmAvailable()) {
     try {
       questions = await llmQuestions(summary, apptTitle);
     } catch {

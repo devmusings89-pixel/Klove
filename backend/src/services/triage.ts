@@ -2,8 +2,7 @@
 // grounded in the family health graph; the rest (a real call, coverage check, bulk import) escalate
 // to the human concierge. ~70/30 AI/human, gated by consent. Mock mode answers deterministically.
 
-import Anthropic from "@anthropic-ai/sdk";
-import { config, enabled } from "../config.js";
+import { runText, llmAvailable } from "./llm-tool.js";
 import { buildSummary } from "./graph.js";
 
 export interface AskResult {
@@ -40,7 +39,7 @@ export async function triageAsk(text: string, members: MemberCtx[]): Promise<Ask
   }
 
   // Informational: ground an answer in the members' summaries.
-  if (!enabled.healthExtraction()) {
+  if (!llmAvailable()) {
     const names = members.map((m) => m.name).join(", ") || "your family";
     return {
       kind: "answer",
@@ -56,16 +55,18 @@ export async function triageAsk(text: string, members: MemberCtx[]): Promise<Ask
     .map((s) => `${s.name}: conditions=[${s.summary.activeConditions.join(", ")}] meds=[${s.summary.activeMedications.join(", ")}]`)
     .join("\n");
 
-  const client = new Anthropic({ apiKey: config.anthropicApiKey });
-  const resp = await client.messages.create({
-    model: config.webAgent.model || "claude-opus-4-8",
-    max_tokens: 600,
-    system:
-      "You are Klove, a calm, competent health Chief of Staff. Answer the caregiver's question grounded ONLY in " +
-      "the family context provided. Be concise and specific. Never diagnose or give medical advice — coordinate and " +
-      "inform. If you don't have the data, say so plainly.",
-    messages: [{ role: "user", content: `Family context:\n${ctx}\n\nQuestion: ${text}` }],
-  });
-  const answer = resp.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
-  return { kind: "answer", routedTo: "ai", answer: answer || "I don't have enough on file to answer that yet." };
+  let answer: string | null = null;
+  try {
+    answer = await runText({
+      system:
+        "You are Klove, a calm, competent health Chief of Staff. Answer the caregiver's question grounded ONLY in " +
+        "the family context provided. Be concise and specific. Never diagnose or give medical advice — coordinate and " +
+        "inform. If you don't have the data, say so plainly.",
+      content: `Family context:\n${ctx}\n\nQuestion: ${text}`,
+      maxTokens: 600,
+    });
+  } catch (err) {
+    console.error("ask LLM failed:", (err as Error).message);
+  }
+  return { kind: "answer", routedTo: "ai", answer: (answer ?? "").trim() || "I don't have enough on file to answer that yet." };
 }

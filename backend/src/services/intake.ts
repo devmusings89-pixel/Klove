@@ -4,7 +4,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import type { Appointment } from "@prisma/client";
-import { config, enabled } from "../config.js";
+import { runTool, llmAvailable } from "./llm-tool.js";
 
 /** A reusable provider pulled from the user's past appointments (so they never re-enter it). */
 export interface ProviderCandidate {
@@ -75,9 +75,17 @@ export async function parseBookingIntent(
   appointments: Appointment[],
   priorDraft?: Partial<BookingDraft>,
 ): Promise<BookingDraft> {
-  const raw = enabled.healthExtraction()
-    ? await llmParse(text, appointments, priorDraft)
-    : mockParse(text, priorDraft);
+  let raw: RawDraft;
+  if (llmAvailable()) {
+    try {
+      raw = await llmParse(text, appointments, priorDraft);
+    } catch (err) {
+      console.error("intake LLM parse failed, falling back to heuristics:", (err as Error).message);
+      raw = mockParse(text, priorDraft);
+    }
+  } else {
+    raw = mockParse(text, priorDraft);
+  }
 
   // Merge onto the prior draft so earlier-captured slots persist across turns.
   const merged: Partial<BookingDraft> = {
@@ -186,7 +194,6 @@ function dateDesc(x: Appointment, y: Appointment): number {
 type RawDraft = Pick<BookingDraft, "reason" | "specialty" | "providerHint" | "location" | "preferredTimes" | "acceptableWindow" | "urgency" | "patientName" | "assistantMessage" | "nextQuestion">;
 
 async function llmParse(text: string, appointments: Appointment[], prior?: Partial<BookingDraft>): Promise<RawDraft> {
-  const client = new Anthropic({ apiKey: config.anthropicApiKey });
   const known = appointments
     .filter((a) => a.provider)
     .slice(0, 10)
@@ -200,18 +207,13 @@ async function llmParse(text: string, appointments: Appointment[], prior?: Parti
     .filter(Boolean)
     .join("\n\n");
 
-  const resp = await client.messages.create({
-    model: config.webAgent.model || "claude-opus-4-8",
-    max_tokens: 1024,
+  const result = await runTool<RawDraft>({
     system: SYSTEM,
-    tools: [INTENT_TOOL],
-    tool_choice: { type: "tool", name: "book_intent" },
-    messages: [{ role: "user", content: context }],
+    content: context,
+    tool: { name: INTENT_TOOL.name, description: INTENT_TOOL.description ?? "", input_schema: INTENT_TOOL.input_schema as Record<string, unknown> },
+    maxTokens: 1024,
   });
-  for (const block of resp.content) {
-    if (block.type === "tool_use" && block.name === "book_intent") return block.input as RawDraft;
-  }
-  return { assistantMessage: "Got it — tell me a bit more about the visit you need." };
+  return result ?? { assistantMessage: "Got it — tell me a bit more about the visit you need." };
 }
 
 // ---- Mock parse (no API key) — deterministic keyword heuristics so the flow runs in dev ----
