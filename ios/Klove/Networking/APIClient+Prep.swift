@@ -26,6 +26,16 @@ extension APIClient {
     func submitVisitSummary(_ memberId: String, appointmentId: String, summary: String, followUps: [String]) async throws -> EmptyResponse {
         try await post("/members/\(memberId)/appointments/\(appointmentId)/summary", body: VisitSummaryBody(summary: summary, followUps: followUps))
     }
+
+    @discardableResult
+    func rescheduleAppointment(_ memberId: String, appointmentId: String, startsAt: String) async throws -> EmptyResponse {
+        try await patch("/members/\(memberId)/appointments/\(appointmentId)", body: ["startsAt": startsAt])
+    }
+
+    @discardableResult
+    func cancelAppointment(_ memberId: String, appointmentId: String) async throws -> EmptyResponse {
+        try await patch("/members/\(memberId)/appointments/\(appointmentId)", body: ["status": "cancelled"])
+    }
 }
 
 /// Result of a concierge booking (POST /members/:id/book). `status` is "confirmed" (simulated /

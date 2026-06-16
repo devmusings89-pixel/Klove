@@ -112,11 +112,21 @@ struct TodayView: View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Upcoming visits", systemImage: "calendar").font(.headline).foregroundStyle(Theme.ink)
             ForEach(appts) { a in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(a.title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
-                    Text([a.memberName, a.provider].compactMap { $0 }.joined(separator: " · "))
-                        .font(.caption).foregroundStyle(Theme.inkSecondary)
+                NavigationLink {
+                    AppointmentDetailView(memberId: a.subjectUserId ?? "", memberName: a.memberName ?? "this member",
+                                          appt: a, onChange: { Task { await load() } })
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(a.title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
+                            Text([a.memberName, a.provider].compactMap { $0 }.joined(separator: " · "))
+                                .font(.caption).foregroundStyle(Theme.inkSecondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(Theme.inkSecondary)
+                    }
                 }
+                .buttonStyle(.plain)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

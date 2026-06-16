@@ -4,6 +4,7 @@ import { requireUser, resolveSubject, isConsentError, type AccessLevel } from ".
 import { ensureHousehold } from "../services/household.js";
 import { buildBrief, saveQuestions } from "../services/prep.js";
 import { bookAppointment } from "../services/concierge.js";
+import { cancelAppointmentReminders } from "../services/reminders.js";
 import { audit } from "../services/audit.js";
 
 /**
@@ -83,6 +84,31 @@ export async function prepRoutes(app: FastifyInstance) {
       });
       await audit(req.user!.id, "booking_requested", userId, reason);
       return reply.code(201).send(outcome);
+    },
+  );
+
+  // Cancel or reschedule an appointment. Body: { status?: "cancelled" } and/or { startsAt?: ISO }.
+  app.patch<{ Params: { id: string; apptId: string }; Body: { status?: string; startsAt?: string } }>(
+    "/members/:id/appointments/:apptId",
+    { preHandler: requireUser },
+    async (req, reply) => {
+      const userId = await subjectOr403(req, reply, req.params.id, "manage", "appointments");
+      if (!userId) return;
+      const appt = await prisma.appointment.findFirst({ where: { id: req.params.apptId, userId } });
+      if (!appt) return reply.code(404).send({ error: "not_found" });
+
+      const data: { status?: string; startsAt?: Date } = {};
+      if (req.body?.status === "cancelled") data.status = "cancelled";
+      if (req.body?.startsAt) {
+        const d = new Date(req.body.startsAt);
+        if (!Number.isNaN(d.getTime())) data.startsAt = d;
+      }
+      if (!Object.keys(data).length) return reply.code(400).send({ error: "nothing_to_update" });
+
+      const updated = await prisma.appointment.update({ where: { id: appt.id }, data });
+      // Cancel existing reminders; the tick re-creates one for the new time if still scheduled.
+      await cancelAppointmentReminders(appt.id);
+      return reply.send(updated);
     },
   );
 

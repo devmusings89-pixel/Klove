@@ -31,7 +31,14 @@ struct UpcomingAppt: Decodable, Identifiable, Hashable {
     let title: String
     let provider: String?
     let startsAt: String?
+    let subjectUserId: String?
     let memberName: String?
+
+    var whenDisplay: String {
+        guard let s = startsAt, let d = ISO8601DateFormatter().date(from: s) else { return "Time TBD" }
+        let f = DateFormatter(); f.dateFormat = "EEE, MMM d 'at' h:mm a"
+        return f.string(from: d)
+    }
 }
 
 struct MemberRef: Decodable, Hashable { let id: String; let name: String }

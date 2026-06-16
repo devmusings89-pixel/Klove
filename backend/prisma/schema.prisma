@@ -450,11 +450,12 @@ model Task {
 // Time- or event-triggered nudge. The scheduler tick fires due reminders into Messages.
 model Reminder {
   id            String   @id @default(cuid())
-  subject       User     @relation("ReminderSubject", fields: [subjectUserId], references: [id])
-  subjectUserId String
-  taskId        String?
-  title         String
-  fireAt        DateTime
+  subject             User     @relation("ReminderSubject", fields: [subjectUserId], references: [id])
+  subjectUserId       String
+  taskId              String?
+  sourceAppointmentId String? // set for auto-generated appointment reminders (dedupe + cancel)
+  title               String
+  fireAt              DateTime
   repeatRule    String? // null | daily | weekly | monthly
   channel       String   @default("push")
   status        String   @default("scheduled") // scheduled | fired | cancelled

@@ -21,7 +21,7 @@ export async function todayRoutes(app: FastifyInstance) {
         orderBy: { createdAt: "desc" },
       }),
       prisma.appointment.findMany({
-        where: { userId: { in: ids }, startsAt: { gte: new Date() } },
+        where: { userId: { in: ids }, status: "scheduled", startsAt: { gte: new Date() } },
         orderBy: { startsAt: "asc" },
         take: 5,
       }),
@@ -48,6 +48,7 @@ export async function todayRoutes(app: FastifyInstance) {
         title: a.title,
         provider: a.provider,
         startsAt: a.startsAt,
+        subjectUserId: a.userId,
         memberName: nameById.get(a.userId) ?? "Member",
       })),
       members: subjects,

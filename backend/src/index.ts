@@ -21,7 +21,7 @@ import { askRoutes } from "./routes/ask.js";
 import { deviceRoutes } from "./routes/devices.js";
 import { runSchedulerTick } from "./services/orchestrator.js";
 import { runExtractionTick, runIngestionTick } from "./services/health-worker.js";
-import { runReminderTick } from "./services/reminders.js";
+import { runReminderTick, autoGenerateReminders } from "./services/reminders.js";
 import { reconcileConciergeJobs } from "./services/concierge.js";
 
 const app = Fastify({ logger: true });
@@ -84,6 +84,7 @@ app
     setInterval(() => {
       runSchedulerTick().catch((err) => app.log.error({ err }, "scheduler tick failed"));
       runReminderTick().catch((err) => app.log.error({ err }, "reminder tick failed"));
+      autoGenerateReminders().catch((err) => app.log.error({ err }, "auto-reminder gen failed"));
       reconcileConciergeJobs().catch((err) => app.log.error({ err }, "concierge reconcile failed"));
     }, 60_000);
     // Health pipeline workers: poll pollable sources + drain the extraction queue.

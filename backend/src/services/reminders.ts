@@ -51,3 +51,45 @@ export async function runReminderTick(): Promise<number> {
   }
   return fired;
 }
+
+/**
+ * Auto-create a "day before" reminder for each upcoming scheduled appointment that doesn't have one
+ * yet. Runs on the scheduler tick. Idempotent via sourceAppointmentId.
+ */
+export async function autoGenerateReminders(): Promise<number> {
+  const now = new Date();
+  const horizon = new Date(now.getTime() + 60 * 86_400_000); // next 60 days
+  const appts = await prisma.appointment.findMany({
+    where: { status: "scheduled", startsAt: { gt: now, lte: horizon } },
+    take: 200,
+  });
+
+  let created = 0;
+  for (const a of appts) {
+    if (!a.startsAt) continue;
+    const existing = await prisma.reminder.findFirst({ where: { sourceAppointmentId: a.id, status: { not: "cancelled" } } });
+    if (existing) continue;
+    // Fire 24h before (or right away if the visit is sooner than a day out).
+    const dayBefore = new Date(a.startsAt.getTime() - 86_400_000);
+    const fireAt = dayBefore > now ? dayBefore : now;
+    await prisma.reminder.create({
+      data: {
+        subjectUserId: a.userId,
+        sourceAppointmentId: a.id,
+        title: `Tomorrow: ${a.title}${a.provider ? ` with ${a.provider}` : ""}`,
+        fireAt,
+        channel: "push",
+      },
+    });
+    created++;
+  }
+  return created;
+}
+
+/** Cancel auto-generated reminders for an appointment (used when it's cancelled/rescheduled away). */
+export async function cancelAppointmentReminders(appointmentId: string): Promise<void> {
+  await prisma.reminder.updateMany({
+    where: { sourceAppointmentId: appointmentId, status: "scheduled" },
+    data: { status: "cancelled" },
+  });
+}
