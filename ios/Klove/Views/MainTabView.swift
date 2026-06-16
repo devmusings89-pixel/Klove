@@ -48,7 +48,10 @@ struct MainTabView: View {
                 .accessibilityLabel("Ask Klove")
         }
         .environment(store)
-        .task { await store.load() }
+        .task {
+            await store.load()
+            PushManager.register()   // ask for notifications + register the APNs token
+        }
         .sheet(isPresented: $showAsk) {
             AskKloveView().environment(store)
         }

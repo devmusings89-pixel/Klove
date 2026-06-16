@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct KloveApp: App {
     @AppStorage(AppStorageKey.hasOnboarded) private var hasOnboarded = false
+    @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
 
     var body: some Scene {
         WindowGroup {
