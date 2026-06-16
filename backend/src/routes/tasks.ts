@@ -54,6 +54,19 @@ export async function taskRoutes(app: FastifyInstance) {
     },
   );
 
+  // Dismiss/delete a task (needs manage over the subject).
+  app.delete<{ Params: { id: string } }>("/tasks/:id", { preHandler: requireUser }, async (req, reply) => {
+    const task = await prisma.task.findUnique({ where: { id: req.params.id } });
+    if (!task) return reply.code(404).send({ error: "not_found" });
+    try {
+      await resolveSubject(req, task.subjectUserId, { need: "manage" });
+    } catch (err) {
+      return reply.code(isConsentError(err) ? 403 : 500).send({ error: "forbidden" });
+    }
+    await prisma.task.delete({ where: { id: task.id } });
+    return reply.send({ ok: true });
+  });
+
   // Pick one of the alternate times the office offered (kind=choose_time) → book that slot.
   app.post<{ Params: { id: string }; Body: { slot: string } }>("/tasks/:id/choose", { preHandler: requireUser }, async (req, reply) => {
     const task = await prisma.task.findUnique({ where: { id: req.params.id } });

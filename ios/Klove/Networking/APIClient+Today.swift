@@ -26,6 +26,12 @@ extension APIClient {
         try await post("/tasks/\(id)/choose", body: ["slot": slot])
     }
 
+    /// Dismiss/delete a task.
+    @discardableResult
+    func deleteTask(_ id: String) async throws -> EmptyResponse {
+        try await delete("/tasks/\(id)")
+    }
+
     func getNotifications() async throws -> NotificationsResponse {
         try await get("/notifications")
     }

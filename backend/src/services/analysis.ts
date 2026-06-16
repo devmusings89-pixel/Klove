@@ -72,6 +72,56 @@ export async function runAnalysis(userId: string, generatedByJobId?: string): Pr
     }
   }
 
+  // 1b) Proactive gaps (deterministic + conservative — "discuss with your provider", never diagnose).
+  {
+    const now = Date.now();
+    const DAY = 86_400_000;
+    const obsTime = (o: { effectiveAt: Date | null; recordedAt: Date }) => (o.effectiveAt ?? o.recordedAt).getTime();
+    const latestMatching = (re: RegExp): number | undefined =>
+      observations.filter((o) => re.test(o.display)).map(obsTime).sort((a, b) => b - a)[0];
+    const activeConds = conditions.filter((c) => (c.clinicalStatus ?? "active") === "active");
+
+    for (const c of activeConds) {
+      const d = c.display.toLowerCase();
+      if (d.includes("diabet")) {
+        const last = latestMatching(/a1c|glyco|hemoglobin a1c/i);
+        if (!last || now - last > 180 * DAY) {
+          drafts.push({
+            severity: "watch",
+            title: "A1c check may be due",
+            detail: "You have an active diabetes diagnosis and no recent A1c on file. Consider scheduling one and discussing your targets with your provider.",
+            relatedResourceIds: [c.id],
+            category: "screening",
+          });
+        }
+      }
+      if (d.includes("hypertens") || d.includes("high blood pressure")) {
+        const last = latestMatching(/blood pressure|systolic|diastolic/i);
+        if (!last || now - last > 180 * DAY) {
+          drafts.push({
+            severity: "info",
+            title: "Blood pressure check may be due",
+            detail: "You have an active hypertension diagnosis and no recent blood-pressure reading on file. Consider a check and discussing it with your provider.",
+            relatedResourceIds: [c.id],
+            category: "screening",
+          });
+        }
+      }
+    }
+    if (activeConds.length && observations.length) {
+      const newest = observations.map(obsTime).sort((a, b) => b - a)[0];
+      if (newest && now - newest > 365 * DAY) {
+        drafts.push({
+          severity: "info",
+          title: "Time for a check-up?",
+          detail: "It's been over a year since your last recorded result. A routine visit may be worth scheduling.",
+          relatedResourceIds: [],
+          category: "screening",
+        });
+      }
+    }
+  }
+
   // 2) LLM cross-diagnosis pass (only when configured).
   if (llmAvailable() && (conditions.length || observations.length)) {
     try {

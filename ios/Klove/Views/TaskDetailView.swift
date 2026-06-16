@@ -45,6 +45,17 @@ struct TaskDetailView: View {
         .background(Theme.background.ignoresSafeArea())
         .navigationTitle("Action")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button(role: .destructive) { Task { await dismissTask() } } label: { Image(systemName: "trash") }
+                    .disabled(working)
+            }
+        }
+    }
+
+    private func dismissTask() async {
+        working = true; defer { working = false }
+        if (try? await api.deleteTask(task.id)) != nil { onChange(); dismiss() }
     }
 
     private var statusPill: some View {

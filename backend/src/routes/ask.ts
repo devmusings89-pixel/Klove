@@ -18,12 +18,32 @@ export async function askRoutes(app: FastifyInstance) {
 
     const result = await triageAsk(text, members);
 
-    // Record the request (and an outbound message so it shows in the inbox).
+    // Record the request.
     const householdId = (await prisma.household.findUnique({ where: { operatorUserId: req.user!.id } }))?.id;
     await prisma.request.create({
       data: { operatorUserId: req.user!.id, householdId, text, kind: "ask", responseJson: JSON.stringify(result), status: result.kind === "escalated" ? "escalated" : "resolved" },
     });
-    return reply.send(result);
+
+    // Escalation actually DOES something: open a concierge job + a waiting task so it shows in Actions.
+    let taskId: string | undefined;
+    if (result.kind === "escalated" && householdId) {
+      const session = await prisma.session.create({
+        data: { userId: req.user!.id, tier: "human", kind: "booking", status: "draft", patientInfo: JSON.stringify({ reason: text }) },
+      });
+      const task = await prisma.task.create({
+        data: {
+          subjectUserId: req.user!.id,
+          householdId,
+          title: `Klove is handling: ${text.slice(0, 60)}`,
+          detail: result.answer,
+          state: "waiting",
+          kind: "book",
+          conciergeJobId: session.id,
+        },
+      });
+      taskId = task.id;
+    }
+    return reply.send({ ...result, taskId });
   });
 
   // "Show me X for <member>": a focused, grounded view (filtered timeline) — not a dashboard.
