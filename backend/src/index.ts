@@ -25,7 +25,21 @@ import { runExtractionTick, runIngestionTick } from "./services/health-worker.js
 import { runReminderTick, autoGenerateReminders } from "./services/reminders.js";
 import { reconcileConciergeJobs } from "./services/concierge.js";
 
-const app = Fastify({ logger: true });
+// HIPAA: never log request/response bodies (they carry PHI) and redact identity headers. The
+// request serializer emits only method+url; bodies are not serialized at all.
+const app = Fastify({
+  logger: {
+    redact: ['req.headers.authorization', 'req.headers["x-user-email"]', "req.headers.cookie"],
+    serializers: {
+      req(req) {
+        return { method: req.method, url: req.url };
+      },
+      res(res) {
+        return { statusCode: res.statusCode };
+      },
+    },
+  },
+});
 
 // Capture the raw body alongside the parsed JSON — Stripe webhook signature
 // verification needs the exact bytes. Applies to all application/json requests.

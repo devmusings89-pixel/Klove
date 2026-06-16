@@ -1,0 +1,11 @@
+node_modules
+dist
+.env
+.env.*
+*.log
+prisma/dev.db
+prisma/*.db
+.git
+.DS_Store
+test
+fly.toml
