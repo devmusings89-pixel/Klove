@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sunrise Family Clinic — Book an Appointment</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; color: #222; }
+      h1 { font-size: 22px; }
+      label { display: block; margin: 12px 0 4px; font-weight: 600; }
+      input, select { width: 100%; padding: 8px; font-size: 15px; box-sizing: border-box; }
+      .step { display: none; }
+      .step.active { display: block; }
+      button { margin-top: 16px; padding: 10px 18px; font-size: 15px; cursor: pointer; }
+      .slot { display: block; width: 100%; text-align: left; margin: 6px 0; padding: 10px; border: 1px solid #ccc; background: #fafafa; }
+      .slot.selected { border-color: #2a7; background: #eaffea; }
+      #confirmation { margin-top: 20px; padding: 16px; background: #eaffea; border: 1px solid #2a7; border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>Sunrise Family Clinic</h1>
+    <p>Book an appointment online.</p>
+
+    <div id="step1" class="step active">
+      <h2>Patient details</h2>
+      <label for="name">Full name</label>
+      <input id="name" name="name" />
+      <label for="dob">Date of birth</label>
+      <input id="dob" name="dob" placeholder="YYYY-MM-DD" />
+      <label for="reason">Reason for visit</label>
+      <input id="reason" name="reason" />
+      <label for="insurance">Insurance</label>
+      <input id="insurance" name="insurance" />
+      <button id="toSlots" type="button">Next: choose a time</button>
+    </div>
+
+    <div id="step2" class="step">
+      <h2>Available times</h2>
+      <button class="slot" data-slot="Mon Jun 22, 9:00 AM" type="button">Mon Jun 22, 9:00 AM</button>
+      <button class="slot" data-slot="Tue Jun 23, 2:00 PM" type="button">Tue Jun 23, 2:00 PM</button>
+      <button class="slot" data-slot="Wed Jun 24, 10:30 AM" type="button">Wed Jun 24, 10:30 AM</button>
+      <button id="confirm" type="button" disabled>Confirm booking</button>
+    </div>
+
+    <div id="confirmation" hidden></div>
+
+    <script>
+      let selected = null;
+      document.getElementById("toSlots").addEventListener("click", () => {
+        document.getElementById("step1").classList.remove("active");
+        document.getElementById("step2").classList.add("active");
+      });
+      document.querySelectorAll(".slot").forEach((b) => {
+        b.addEventListener("click", () => {
+          document.querySelectorAll(".slot").forEach((s) => s.classList.remove("selected"));
+          b.classList.add("selected");
+          selected = b.dataset.slot;
+          document.getElementById("confirm").disabled = false;
+        });
+      });
+      document.getElementById("confirm").addEventListener("click", () => {
+        const name = document.getElementById("name").value || "the patient";
+        const conf = "SUN-" + Math.floor(1000 + Math.random() * 9000);
+        document.getElementById("step2").classList.remove("active");
+        const el = document.getElementById("confirmation");
+        el.hidden = false;
+        el.textContent = `Appointment confirmed for ${name} on ${selected}. Confirmation number: ${conf}.`;
+      });
+    </script>
+  </body>
+</html>

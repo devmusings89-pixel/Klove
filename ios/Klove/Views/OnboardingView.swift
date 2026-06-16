@@ -1,0 +1,172 @@
+import SwiftUI
+
+/// First-run flow: welcome → value prop → identify → connect data sources.
+/// Completion is signaled by setting the `hasOnboarded` flag, which the app root observes.
+struct OnboardingView: View {
+    @State private var model = OnboardingModel()
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ProgressDots(count: OnboardingModel.Step.allCases.count, current: model.step.rawValue)
+                .padding(.top, 12)
+
+            ScrollView {
+                content
+                    .padding(.horizontal, 24)
+                    .padding(.top, 24)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            footer
+                .padding(.horizontal, 24)
+                .padding(.bottom, 12)
+        }
+        .animation(.snappy, value: model.step)
+    }
+
+    // MARK: - Step content
+
+    @ViewBuilder
+    private var content: some View {
+        switch model.step {
+        case .welcome: welcome
+        case .value: value
+        case .identify: identify
+        case .connect: connect
+        }
+    }
+
+    private var welcome: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Image(systemName: "heart.text.square.fill")
+                .font(.system(size: 64))
+                .foregroundStyle(.tint)
+            Text("Welcome to Klove")
+                .font(.largeTitle.bold())
+            Text("Your health records, appointments, and the dots between them — understood in one place.")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var value: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            Text("What Klove does")
+                .font(.largeTitle.bold())
+            VStack(alignment: .leading, spacing: 20) {
+                FeatureRow(icon: "tray.full.fill", title: "All your records, together",
+                           detail: "Labs, conditions, medications, and visits in one timeline.")
+                FeatureRow(icon: "bell.badge.fill", title: "Never miss an appointment",
+                           detail: "Reminders and AI-assisted booking when you need care.")
+                FeatureRow(icon: "exclamationmark.shield.fill", title: "Things to be aware of",
+                           detail: "Surfaces out-of-range results worth discussing with your doctor.")
+                FeatureRow(icon: "point.3.connected.trianglepath.dotted", title: "Connects the dots",
+                           detail: "Finds patterns across your diagnoses and history.")
+            }
+        }
+    }
+
+    private var identify: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Let's set up your account")
+                .font(.largeTitle.bold())
+            Text("We'll use this to keep your health data private to you.")
+                .foregroundStyle(.secondary)
+
+            TextField("you@example.com", text: $model.email)
+                .keyboardType(.emailAddress)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .textContentType(.emailAddress)
+                .padding()
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+
+            if let error = model.identifyError {
+                Text(error).font(.footnote).foregroundStyle(.red)
+            }
+
+            Label("Sign in with Apple is coming soon.", systemImage: "applelogo")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var connect: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Bring in your health data")
+                .font(.largeTitle.bold())
+            Text("Connect any sources you like — you can add more later.")
+                .foregroundStyle(.secondary)
+
+            ConnectSourcesView(model: model.sources)
+
+            Text("Your data is processed securely and is never shared without your consent. Klove surfaces information to discuss with your provider and is not a substitute for medical advice.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.top, 4)
+        }
+    }
+
+    // MARK: - Footer buttons
+
+    private var footer: some View {
+        VStack(spacing: 12) {
+            Button(action: primaryAction) {
+                Text(model.step.isLast ? "Finish" : "Continue")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+            }
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
+
+            if model.step.isLast {
+                Button("Skip for now", action: { model.finish() })
+                    .font(.subheadline)
+            } else if model.step != .welcome {
+                Button("Back", action: { model.back() })
+                    .font(.subheadline)
+            }
+        }
+    }
+
+    private func primaryAction() {
+        if model.step.isLast { model.finish() } else { model.advance() }
+    }
+}
+
+// MARK: - Small building blocks
+
+private struct ProgressDots: View {
+    let count: Int
+    let current: Int
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(0..<count, id: \.self) { i in
+                Capsule()
+                    .fill(i == current ? Theme.accent : Color(.systemGray4))
+                    .frame(width: i == current ? 22 : 7, height: 7)
+            }
+        }
+    }
+}
+
+private struct FeatureRow: View {
+    let icon: String
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 16) {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundStyle(.tint)
+                .frame(width: 32)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.headline)
+                Text(detail).font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+    }
+}

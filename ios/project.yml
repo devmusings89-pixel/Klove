@@ -1,0 +1,59 @@
+# XcodeGen spec. Generate the project with:  xcodegen generate   (brew install xcodegen)
+# Then open Klove.xcodeproj in Xcode and run on an iOS 17+ simulator.
+name: Klove
+options:
+  bundleIdPrefix: app.klove
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # NO: we ship an explicit Info.plist (via the target `info:` block). The classic Process-Info.plist
+    # step then merges actool's CFBundleIconName and keeps our orientation/usage keys. With YES, Xcode
+    # generates its own plist and drops both — which fails App Store validation.
+    GENERATE_INFOPLIST_FILE: NO
+    SWIFT_STRICT_CONCURRENCY: complete
+targets:
+  Klove:
+    type: application
+    platform: iOS
+    sources:
+      - Klove
+    info:
+      path: Klove/Info.plist
+      properties:
+        UILaunchScreen: {}
+        CFBundleDisplayName: Klove
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        CFBundleURLTypes:
+          - CFBundleURLName: app.klove.client
+            CFBundleURLSchemes:
+              - klove
+        NSHealthShareUsageDescription: Klove reads your family's health records, lab results, and vitals to keep each member's timeline up to date and surface things to discuss with your provider.
+        NSHealthUpdateUsageDescription: Klove does not write to Apple Health; this access is requested only so the app can read your family's health records to keep their timelines up to date.
+        NSHealthClinicalHealthRecordsShareUsageDescription: Klove imports clinical records from the Health app so your family's lab results, conditions, and medications are all in one place.
+        NSCameraUsageDescription: Klove uses the camera to capture photos of lab results, insurance cards, and other health documents.
+        NSMicrophoneUsageDescription: Klove uses the microphone so you can speak to your health concierge, like "book Mom a dermatology visit".
+        NSSpeechRecognitionUsageDescription: Klove transcribes what you say on this device so it can understand the request you want handled.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.klove.client
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        CODE_SIGN_ENTITLEMENTS: Klove/Klove.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - package: stripe-ios
+        product: StripePaymentSheet
+packages:
+  stripe-ios:
+    url: https://github.com/stripe/stripe-ios
+    from: "24.0.0"

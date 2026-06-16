@@ -1,0 +1,116 @@
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { prisma } from "../db.js";
+import { requireUser, resolveSubject, isConsentError, type AccessLevel } from "../services/auth.js";
+import { ensureHousehold } from "../services/household.js";
+import { buildBrief, saveQuestions } from "../services/prep.js";
+import { bookAppointment } from "../services/concierge.js";
+import { audit } from "../services/audit.js";
+
+/**
+ * Appointment-prep hero flow (J4): assemble a one-page brief + personalized questions, authorize
+ * Klove to act, hand off booking to the concierge, and capture the visit summary into follow-ups.
+ */
+export async function prepRoutes(app: FastifyInstance) {
+  async function subjectOr403(req: FastifyRequest, reply: FastifyReply, id: string, need: AccessLevel, category?: string) {
+    try {
+      return (await resolveSubject(req, id, { need, category })).userId;
+    } catch (err) {
+      reply.code(isConsentError(err) ? 403 : 500).send({ error: "forbidden" });
+      return null;
+    }
+  }
+
+  // The one-page brief + drafted questions for a member's upcoming visit.
+  app.get<{ Params: { id: string }; Querystring: { appointmentId?: string } }>(
+    "/members/:id/prep",
+    { preHandler: requireUser },
+    async (req, reply) => {
+      const userId = await subjectOr403(req, reply, req.params.id, "view", "records");
+      if (!userId) return;
+      return reply.send(await buildBrief(userId, req.query.appointmentId));
+    },
+  );
+
+  // Save operator-edited questions.
+  app.patch<{ Params: { id: string; apptId: string }; Body: { questions: string[] } }>(
+    "/members/:id/appointments/:apptId/questions",
+    { preHandler: requireUser },
+    async (req, reply) => {
+      const userId = await subjectOr403(req, reply, req.params.id, "manage", "appointments");
+      if (!userId) return;
+      const questions = (req.body?.questions ?? []).filter((q) => typeof q === "string");
+      await saveQuestions(userId, req.params.apptId, questions);
+      return reply.send({ ok: true, questions });
+    },
+  );
+
+  // Authorize Klove to act on the member's behalf (book/call). Records the authorization.
+  app.post<{ Params: { id: string } }>("/members/:id/authorize-booking", { preHandler: requireUser }, async (req, reply) => {
+    const userId = await subjectOr403(req, reply, req.params.id, "operate");
+    if (!userId) return;
+    const householdId = await ensureHousehold(req.user!.id);
+    await prisma.message.create({
+      data: {
+        householdId,
+        subjectUserId: userId,
+        direction: "out",
+        channel: "inapp",
+        title: "Authorized",
+        body: "You authorized Klove to book and coordinate this appointment on your behalf.",
+      },
+    });
+    await audit(req.user!.id, "booking_authorized", userId);
+    return reply.send({ ok: true, authorizedAt: new Date().toISOString() });
+  });
+
+  // Book on the member's behalf (concierge). Produces a confirmed appointment, a handled Task, and
+  // an inbox confirmation. Simulated/deterministic — never places live calls (see services/concierge.ts).
+  app.post<{ Params: { id: string }; Body: { reason?: string; provider?: string; preferredDate?: string; preferredTimes?: string; phone?: string; website?: string } }>(
+    "/members/:id/book",
+    { preHandler: requireUser },
+    async (req, reply) => {
+      const userId = await subjectOr403(req, reply, req.params.id, "operate");
+      if (!userId) return;
+      const householdId = await ensureHousehold(req.user!.id);
+      const reason = req.body?.reason?.trim() || "Appointment booking";
+      const outcome = await bookAppointment(req.user!.id, userId, householdId, {
+        reason,
+        provider: req.body?.provider,
+        preferredDate: req.body?.preferredDate,
+        preferredTimes: req.body?.preferredTimes,
+        phone: req.body?.phone,
+        website: req.body?.website,
+      });
+      await audit(req.user!.id, "booking_requested", userId, reason);
+      return reply.code(201).send(outcome);
+    },
+  );
+
+  // Capture an after-visit summary and spawn follow-up tasks.
+  app.post<{ Params: { id: string; apptId: string }; Body: { summary: string; followUps?: string[] } }>(
+    "/members/:id/appointments/:apptId/summary",
+    { preHandler: requireUser },
+    async (req, reply) => {
+      const userId = await subjectOr403(req, reply, req.params.id, "manage", "appointments");
+      if (!userId) return;
+      const householdId = await ensureHousehold(req.user!.id);
+      const summary = req.body?.summary?.trim();
+      if (!summary) return reply.code(400).send({ error: "summary required" });
+
+      await prisma.appointment.updateMany({
+        where: { id: req.params.apptId, userId },
+        data: { status: "completed", notes: JSON.stringify({ visitSummary: summary }) },
+      });
+
+      const followUps = (req.body?.followUps ?? []).filter((f) => typeof f === "string" && f.trim());
+      const createdTasks: string[] = [];
+      for (const f of followUps) {
+        const t = await prisma.task.create({
+          data: { subjectUserId: userId, householdId, title: f.trim(), state: "needs_you", kind: "follow_up", detail: "From your recent visit." },
+        });
+        createdTasks.push(t.id);
+      }
+      return reply.send({ ok: true, followUpTasks: createdTasks.length });
+    },
+  );
+}

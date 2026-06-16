@@ -1,0 +1,515 @@
+// Klove data model.
+// Storage: Supabase PostgreSQL in all environments (HIPAA-eligible with a signed BAA).
+// JSON-shaped fields are stored as String (serialized) to keep the model portable and simple.
+//
+// Household model (Klove): every member is a `User` who owns their own clinical data (the
+// FHIR-lite tables below stay parented on userId — no re-parenting). The Operator is a User who
+// holds ConsentGrants over the *other* members. Members who can't log in yet (minor child, aging
+// parent) are login-less "managed" Users (`managed = true`, no authUserId) the operator controls.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  // Pooled connection (Supabase Supavisor, port 6543) for the app runtime.
+  url       = env("DATABASE_URL")
+  // Direct connection (port 5432) used by Prisma Migrate for DDL.
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id              String                 @id @default(cuid())
+  // Optional: managed members (minors / aging parents) have no email until promoted to a login.
+  email           String?                @unique
+  // Supabase Auth UID. Links a Klove user to an authenticated identity; null for managed members.
+  authUserId      String?                @unique
+  // Display name for the person within the household (e.g. "Dad", "Ava"); operator-set for managed.
+  displayName     String?
+  dob             DateTime?
+  // A managed member cannot log in; the operator owns their records on their behalf.
+  managed         Boolean                @default(false)
+  managedByUserId String?
+  managedBy       User?                  @relation("ManagedUsers", fields: [managedByUserId], references: [id])
+  managedUsers    User[]                 @relation("ManagedUsers")
+  deviceId        String?
+  apnsToken       String? // device token for APNs push (Phase 2)
+  createdAt       DateTime               @default(now())
+  sessions        Session[]
+  connections     DataSourceConnection[]
+  documents       HealthDocument[]
+  observations    Observation[]
+  conditions      Condition[]
+  medications     MedicationStatement[]
+  reports         DiagnosticReport[]
+  allergies       AllergyIntolerance[]
+  alerts          HealthAlert[]
+  appointments    Appointment[]
+  profiles        Profile[]
+
+  // ---- Household / consent graph ----
+  operatedHousehold Household?            @relation("HouseholdOperator")
+  memberships       HouseholdMembership[] @relation("MembershipUser")
+  grantsGiven       ConsentGrant[]        @relation("GrantGrantee") // grants where this user is the actor
+  grantsReceived    ConsentGrant[]        @relation("GrantSubject") // grants over this user's data
+  tasks             Task[]                @relation("TaskSubject")
+  reminders         Reminder[]            @relation("ReminderSubject")
+  requestsMade      Request[]             @relation("RequestOperator")
+  requestsAbout     Request[]             @relation("RequestSubject")
+  messages          Message[]             @relation("MessageSubject")
+}
+
+// ---- Health-data ingestion: provenance + work queue ----
+
+// One connected data source per user (email mailbox, HealthKit, aggregator, upload, ...).
+model DataSourceConnection {
+  id                String           @id @default(cuid())
+  user              User             @relation(fields: [userId], references: [id])
+  userId            String
+  type              String // gmail | imap | healthkit | aggregator | upload
+  status            String           @default("connected") // connected | pending | error | revoked
+  accessTokenEnc    String? // envelope-encrypted; never plaintext
+  refreshTokenEnc   String?
+  tokenExpiresAt    DateTime?
+  externalAccountId String? // provider account id (Gmail address, aggregator patient id, ...)
+  scopes            String? // JSON array of granted scopes
+  cursor            String? // JSON: Gmail historyId / IMAP UID / aggregator sync token
+  config            String? // JSON: source-specific settings
+  lastError         String?
+  lastSyncedAt      DateTime?
+  createdAt         DateTime         @default(now())
+  documents         HealthDocument[]
+
+  @@unique([userId, type, externalAccountId])
+  @@index([userId])
+}
+
+// One raw ingested artifact (email body, attachment, uploaded photo/PDF, aggregator bundle).
+model HealthDocument {
+  id           String                @id @default(cuid())
+  user         User                  @relation(fields: [userId], references: [id])
+  userId       String
+  connection   DataSourceConnection? @relation(fields: [connectionId], references: [id])
+  connectionId String?
+  sourceType   String // gmail | imap | healthkit | aggregator | upload
+  storagePath  String? // Supabase Storage object key (or local path in mock mode)
+  mimeType     String
+  sizeBytes    Int                   @default(0)
+  originalName String?
+  sourceRef    String? // Gmail message id / aggregator doc id / etc.
+  sha256       String // content hash for idempotent dedupe
+  // uploaded | queued | extracting | extracted | failed | skipped_non_health
+  status       String                @default("queued")
+  receivedAt   DateTime?
+  createdAt    DateTime              @default(now())
+  jobs         ExtractionJob[]
+
+  @@unique([userId, sha256])
+  @@index([userId, status])
+}
+
+// Async pipeline work queue. Drained by runExtractionTick.
+model ExtractionJob {
+  id            String          @id @default(cuid())
+  document      HealthDocument? @relation(fields: [documentId], references: [id])
+  documentId    String?
+  userId        String
+  kind          String // vision_ocr | email_parse | fhir_normalize | analysis
+  status        String          @default("pending") // pending | running | done | failed
+  attempts      Int             @default(0)
+  lastError     String?
+  runAfter      DateTime        @default(now()) // exponential-backoff gate
+  resultSummary String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([status, runAfter])
+}
+
+// ---- FHIR-lite normalized clinical layer ----
+
+model Observation {
+  id             String            @id @default(cuid())
+  user           User              @relation(fields: [userId], references: [id])
+  userId         String
+  documentId     String?
+  sourceType     String
+  code           String? // LOINC if known
+  display        String
+  valueNum       Float?
+  valueString    String?
+  unit           String?
+  referenceRange String?
+  abnormalFlag   String? // H | L | A | null
+  effectiveAt    DateTime?
+  recordedAt     DateTime          @default(now())
+  confidence     Float             @default(1)
+  rawJson        String?
+  report         DiagnosticReport? @relation(fields: [reportId], references: [id])
+  reportId       String?
+
+  @@index([userId, code])
+}
+
+model Condition {
+  id             String    @id @default(cuid())
+  user           User      @relation(fields: [userId], references: [id])
+  userId         String
+  documentId     String?
+  sourceType     String
+  code           String? // ICD-10 / SNOMED if known
+  display        String
+  clinicalStatus String? // active | resolved | remission
+  onsetDate      DateTime?
+  severity       String?
+  recordedAt     DateTime  @default(now())
+  confidence     Float     @default(1)
+  rawJson        String?
+
+  @@index([userId])
+}
+
+model MedicationStatement {
+  id         String    @id @default(cuid())
+  user       User      @relation(fields: [userId], references: [id])
+  userId     String
+  documentId String?
+  sourceType String
+  display    String
+  rxNormCode String?
+  dosage     String?
+  status     String? // active | completed | stopped
+  startDate  DateTime?
+  endDate    DateTime?
+  recordedAt DateTime  @default(now())
+  confidence Float     @default(1)
+  rawJson    String?
+
+  @@index([userId])
+}
+
+model DiagnosticReport {
+  id           String        @id @default(cuid())
+  user         User          @relation(fields: [userId], references: [id])
+  userId       String
+  documentId   String?
+  sourceType   String
+  display      String
+  category     String?
+  issuedAt     DateTime?
+  recordedAt   DateTime      @default(now())
+  confidence   Float         @default(1)
+  rawJson      String?
+  observations Observation[]
+
+  @@index([userId])
+}
+
+model AllergyIntolerance {
+  id         String   @id @default(cuid())
+  user       User     @relation(fields: [userId], references: [id])
+  userId     String
+  documentId String?
+  sourceType String
+  substance  String
+  reaction   String?
+  severity   String?
+  recordedAt DateTime @default(now())
+  confidence Float    @default(1)
+  rawJson    String?
+
+  @@index([userId])
+}
+
+// Appointments parsed from email/documents (visit confirmations, reminders) — drives reminders.
+// Reusable patient profile ("My Info") so booking never re-asks for demographics. Supports
+// family/dependent profiles (multiple per user); the primary one auto-fills new bookings.
+model Profile {
+  id           String          @id @default(cuid())
+  user         User            @relation(fields: [userId], references: [id])
+  userId       String
+  fullName     String
+  dob          String? // ISO yyyy-mm-dd
+  phone        String?
+  email        String?
+  address      String?
+  relationship String          @default("self") // self | spouse | child | parent | other
+  isPrimary    Boolean         @default(false)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  insurance    InsurancePlan[]
+
+  @@index([userId])
+}
+
+// An insurance plan attached to a profile. memberIdEnc/groupIdEnc are envelope-encrypted (crypto.ts).
+model InsurancePlan {
+  id          String   @id @default(cuid())
+  profile     Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  profileId   String
+  carrier     String? // e.g. "Blue Cross Blue Shield"
+  planName    String?
+  memberIdEnc String? // encrypted member/subscriber ID (PHI)
+  groupIdEnc  String? // encrypted group number
+  rxBin       String?
+  rxPcn       String?
+  holderName  String? // subscriber/policyholder if different from the patient
+  isPrimary   Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([profileId])
+}
+
+model Appointment {
+  id              String    @id @default(cuid())
+  user            User      @relation(fields: [userId], references: [id])
+  userId          String
+  documentId      String?
+  sourceType      String
+  title           String // e.g. "Cardiology follow-up"
+  provider        String? // doctor or clinic name
+  providerPhone   String? // captured from the email/doc when present (for one-tap rebooking)
+  providerWebsite String?
+  providerAddress String?
+  location        String?
+  startsAt        DateTime?
+  endsAt          DateTime?
+  status          String    @default("scheduled") // scheduled | completed | cancelled
+  confirmation    String?
+  notes           String?
+  recordedAt      DateTime  @default(now())
+  confidence      Float     @default(1)
+  rawJson         String?
+
+  @@index([userId, startsAt])
+}
+
+// Output of the cross-diagnosis analysis pass.
+model HealthAlert {
+  id                 String    @id @default(cuid())
+  user               User      @relation(fields: [userId], references: [id])
+  userId             String
+  severity           String    @default("info") // info | watch | urgent
+  // Higher rank = surfaces nearer the top of the Today briefing. Set by the Insight engine.
+  rank               Float     @default(0)
+  category           String? // screening | refill | trend | coverage | follow_up | ...
+  title              String
+  detail             String
+  relatedResourceIds String? // JSON array of resource ids this alert connects
+  generatedByJobId   String?
+  acknowledgedAt     DateTime?
+  createdAt          DateTime  @default(now())
+
+  @@index([userId, acknowledgedAt])
+}
+
+model Session {
+  id                    String       @id @default(cuid())
+  user                  User         @relation(fields: [userId], references: [id])
+  userId                String
+  // draft | paid | scheduling | in_progress | awaiting_choice | awaiting_info | completed | failed
+  status                String       @default("draft")
+  // A Session doubles as a ConciergeJob in Klove. tier: ai (autonomous) | human (Tier-2 concierge).
+  tier                  String       @default("ai")
+  kind                  String       @default("booking") // booking | prep | follow_up
+  patientInfo           String // JSON: { name, dob, reason, insurance, preferredTimes, acceptableWindow }
+  maxCalls              Int          @default(3)
+  minutesCap            Int          @default(60)
+  stopWhenBooked        Boolean      @default(true)
+  stripePaymentIntentId String?
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+  targets               CallTarget[]
+
+  @@index([status])
+}
+
+model CallTarget {
+  id                  String       @id @default(cuid())
+  session             Session      @relation(fields: [sessionId], references: [id])
+  sessionId           String
+  officeName          String
+  phoneNumber         String? // null => looked up via Google Places before calling
+  website             String? // online booking URL (for the web channel); looked up if absent
+  timezone            String       @default("America/New_York")
+  order               Int
+  // pending | calling | awaiting_choice | awaiting_info | awaiting_verification | booked | requested | voicemail | failed | no_answer
+  status              String       @default("pending")
+  channel             String? // channel that handled this target: voice | web | fhir | zocdoc | messaging | fax
+  channelHints        String? // JSON: { fhirEndpoint?, zocdocProviderId?, email?, fax? }
+  vapiCallId          String?
+  calledAt            DateTime? // when the outbound attempt was placed (for stuck-call reaping)
+  offeredSlots        String? // JSON array of slot strings collected in gather mode
+  chosenSlot          String? // the slot the patient picked
+  missingInfo         String? // JSON array of info the office required that we couldn't provide
+  verificationId      String? // token for the held browser session awaiting a one-time code
+  verificationContact String? // where the scheduler sent the code (e.g. "your email")
+  createdAt           DateTime     @default(now())
+  results             CallResult[]
+
+  @@index([sessionId])
+}
+
+model CallResult {
+  id             String     @id @default(cuid())
+  callTarget     CallTarget @relation(fields: [callTargetId], references: [id])
+  callTargetId   String
+  phase          String     @default("single") // gather | book | single
+  channel        String? // channel that produced this result: voice | web | fhir | ...
+  transcript     String?
+  summary        String?
+  structuredData String? // JSON: { outcome, appointmentBooked, appointmentDateTime, confirmation, offeredSlots, notes }
+  recordingUrl   String?
+  endedReason    String?
+  durationSec    Int?
+  createdAt      DateTime   @default(now())
+
+  @@index([callTargetId])
+}
+
+// ============================================================================
+// Household / consent graph (Klove). Additive layer over User — see header note.
+// ============================================================================
+
+// One family's health operation. Exactly one Operator (the primary caregiver) per household.
+model Household {
+  id             String                @id @default(cuid())
+  operatorUser   User                  @relation("HouseholdOperator", fields: [operatorUserId], references: [id])
+  operatorUserId String                @unique
+  name           String?
+  createdAt      DateTime              @default(now())
+  memberships    HouseholdMembership[]
+  tasks          Task[]
+  messages       Message[]
+  requests       Request[]
+}
+
+// Roster row: which User belongs to which Household, and as what kind of member.
+model HouseholdMembership {
+  id           String    @id @default(cuid())
+  household    Household @relation(fields: [householdId], references: [id])
+  householdId  String
+  user         User      @relation("MembershipUser", fields: [userId], references: [id])
+  userId       String
+  relationship String // self | child | parent | spouse | adult
+  memberType   String // self | minor | aging_parent | consenting_adult
+  isOperator   Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+
+  @@unique([householdId, userId])
+  @@index([userId])
+}
+
+// Scoped, revocable permission for one User (grantee, normally the operator) to act on another
+// User's (subject) data. Self-access needs no grant. For consenting adults the subject owns the
+// grant (owner-controlled) and it stays `pending` until the invite is accepted.
+model ConsentGrant {
+  id            String    @id @default(cuid())
+  grantee       User      @relation("GrantGrantee", fields: [granteeUserId], references: [id])
+  granteeUserId String
+  subject       User      @relation("GrantSubject", fields: [subjectUserId], references: [id])
+  subjectUserId String
+  householdId   String?
+  accessLevel   String    @default("view") // view | manage | operate
+  categories    String    @default("[\"all\"]") // JSON array: all | records | apple_health | appointments
+  status        String    @default("active") // active | pending | revoked
+  invitedEmail  String?
+  inviteToken   String?   @unique
+  acceptedAt    DateTime?
+  revokedAt     DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@unique([granteeUserId, subjectUserId])
+  @@index([subjectUserId])
+}
+
+// A doable unit of work with one clear next step. Surfaces in the Today briefing & Actions log.
+model Task {
+  id              String    @id @default(cuid())
+  subject         User      @relation("TaskSubject", fields: [subjectUserId], references: [id])
+  subjectUserId   String
+  household       Household @relation(fields: [householdId], references: [id])
+  householdId     String
+  title           String
+  detail          String?
+  state           String    @default("needs_you") // needs_you | waiting | handled
+  kind            String    @default("review") // review | book | prep | follow_up | reminder | choose_time
+  dueAt           DateTime?
+  sourceInsightId String? // -> HealthAlert.id that generated this task
+  conciergeJobId  String? // -> Session.id when routed to the concierge engine
+  options         String? // JSON array of offered alternate slots (when kind=choose_time)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([householdId, state])
+  @@index([subjectUserId])
+}
+
+// Time- or event-triggered nudge. The scheduler tick fires due reminders into Messages.
+model Reminder {
+  id            String   @id @default(cuid())
+  subject       User     @relation("ReminderSubject", fields: [subjectUserId], references: [id])
+  subjectUserId String
+  taskId        String?
+  title         String
+  fireAt        DateTime
+  repeatRule    String? // null | daily | weekly | monthly
+  channel       String   @default("push")
+  status        String   @default("scheduled") // scheduled | fired | cancelled
+  createdAt     DateTime @default(now())
+
+  @@index([status, fireAt])
+  @@index([subjectUserId])
+}
+
+// A conversational ask from the operator to Klove ("Ask Klove" / "Show me"); routed AI vs human.
+model Request {
+  id             String     @id @default(cuid())
+  operator       User       @relation("RequestOperator", fields: [operatorUserId], references: [id])
+  operatorUserId String
+  subject        User?      @relation("RequestSubject", fields: [subjectUserId], references: [id])
+  subjectUserId  String?
+  household      Household? @relation(fields: [householdId], references: [id])
+  householdId    String?
+  text           String
+  kind           String     @default("ask") // ask | show_me | book
+  responseJson   String?
+  status         String     @default("open") // open | resolved | escalated
+  createdAt      DateTime   @default(now())
+
+  @@index([operatorUserId])
+}
+
+// HIPAA audit trail: every consent change and action-taken-on-behalf is recorded immutably.
+model AuditEvent {
+  id            String   @id @default(cuid())
+  actorUserId   String // who performed the action
+  action        String // consent_granted | consent_revoked | booking_authorized | booking_requested | ...
+  subjectUserId String? // whose data it concerned
+  detail        String? // short human description (no PHI bodies)
+  createdAt     DateTime @default(now())
+
+  @@index([subjectUserId, createdAt])
+  @@index([actorUserId, createdAt])
+}
+
+// A communication in or out (notification, push, outbound provider contact). Powers the inbox.
+model Message {
+  id            String    @id @default(cuid())
+  household     Household @relation(fields: [householdId], references: [id])
+  householdId   String
+  subject       User?     @relation("MessageSubject", fields: [subjectUserId], references: [id])
+  subjectUserId String?
+  direction     String    @default("out") // in | out
+  channel       String    @default("inapp") // push | inapp | email
+  title         String?
+  body          String
+  relatedTaskId String?
+  readAt        DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([householdId, createdAt])
+  @@index([subjectUserId, readAt])
+}

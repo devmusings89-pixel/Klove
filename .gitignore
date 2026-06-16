@@ -1,0 +1,33 @@
+# ---- OS ----
+.DS_Store
+**/.DS_Store
+
+# ---- Local agent / editor state ----
+.claude/
+
+# ---- Secrets: never commit real env files (templates like .env.example are tracked) ----
+.env
+*.env
+
+# ---- Node / backend ----
+**/node_modules/
+backend/dist/
+
+# ---- Databases (local dev) ----
+*.db
+*.db-journal
+backend/prisma/dev.db*
+
+# ---- Runtime artifacts / local storage (PHI — never commit) ----
+**/.uploads/
+backend/snakecase-backup.json
+
+# ---- Xcode / iOS (Klove.xcodeproj is generated from project.yml by xcodegen) ----
+ios/build/
+ios/Klove.xcodeproj/
+ios/Svasa.xcodeproj/
+**/xcuserdata/
+**/*.xcuserstate
+**/.swiftpm/
+DerivedData/
+*.xcarchive
