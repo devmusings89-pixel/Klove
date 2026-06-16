@@ -96,6 +96,29 @@ export async function memberDataRoutes(app: FastifyInstance) {
     return reply.send(await buildSummary(userId));
   });
 
+  // Correct the record: remove a wrong timeline entry (operator's "this isn't right / not mine").
+  app.delete<{ Params: { id: string; kind: string; recordId: string } }>(
+    "/members/:id/records/:kind/:recordId",
+    { preHandler: requireUser },
+    async (req, reply) => {
+      const userId = await subjectOr403(req, reply, req.params.id, "manage", "records");
+      if (!userId) return;
+      const { kind, recordId } = req.params;
+      const where = { id: recordId, userId };
+      let count = 0;
+      switch (kind) {
+        case "observation": ({ count } = await prisma.observation.deleteMany({ where })); break;
+        case "condition": ({ count } = await prisma.condition.deleteMany({ where })); break;
+        case "medication": ({ count } = await prisma.medicationStatement.deleteMany({ where })); break;
+        case "allergy": ({ count } = await prisma.allergyIntolerance.deleteMany({ where })); break;
+        case "appointment": ({ count } = await prisma.appointment.deleteMany({ where })); break;
+        default: return reply.code(400).send({ error: "unsupported_kind" });
+      }
+      if (count === 0) return reply.code(404).send({ error: "not_found" });
+      return reply.send({ ok: true });
+    },
+  );
+
   // ---- Sources (connections) ----
 
   app.get<{ Params: { id: string } }>("/members/:id/sources", { preHandler: requireUser }, async (req, reply) => {

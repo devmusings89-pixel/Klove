@@ -19,6 +19,7 @@ import { notificationRoutes } from "./routes/notifications.js";
 import { prepRoutes } from "./routes/prep.js";
 import { askRoutes } from "./routes/ask.js";
 import { deviceRoutes } from "./routes/devices.js";
+import { preferenceRoutes } from "./routes/preferences.js";
 import { runSchedulerTick } from "./services/orchestrator.js";
 import { runExtractionTick, runIngestionTick } from "./services/health-worker.js";
 import { runReminderTick, autoGenerateReminders } from "./services/reminders.js";
@@ -75,6 +76,7 @@ await app.register(notificationRoutes);
 await app.register(prepRoutes);
 await app.register(askRoutes);
 await app.register(deviceRoutes);
+await app.register(preferenceRoutes);
 
 app
   .listen({ port: config.port, host: "0.0.0.0" })

@@ -31,8 +31,8 @@ export async function registerDeviceToken(userId: string, token: string): Promis
 
 /** Best-effort push to a specific user (used by reminders and concierge updates). */
 export async function sendPushToUser(userId: string, title: string, body: string): Promise<void> {
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: { apnsToken: true } });
-  if (!user?.apnsToken) return;
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { apnsToken: true, pushEnabled: true } });
+  if (!user?.apnsToken || user.pushEnabled === false) return; // respect the notification preference
   await sendApns(user.apnsToken, title, body);
 }
 

@@ -35,6 +35,8 @@ model User {
   managedUsers    User[]                 @relation("ManagedUsers")
   deviceId        String?
   apnsToken       String? // device token for APNs push (Phase 2)
+  pushEnabled     Boolean                @default(true) // notification preference
+  reminderLeadHours Int                  @default(24) // how far before an appointment to remind
   createdAt       DateTime               @default(now())
   sessions        Session[]
   connections     DataSourceConnection[]

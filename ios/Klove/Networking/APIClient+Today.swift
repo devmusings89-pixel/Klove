@@ -32,6 +32,26 @@ extension APIClient {
         try await delete("/tasks/\(id)")
     }
 
+    func getPreferences() async throws -> Preferences {
+        try await get("/preferences")
+    }
+
+    @discardableResult
+    func updatePreferences(pushEnabled: Bool, reminderLeadHours: Int) async throws -> Preferences {
+        try await patch("/preferences", body: PreferencesBody(pushEnabled: pushEnabled, reminderLeadHours: reminderLeadHours))
+    }
+
+    /// Remove a wrong record from a member's timeline (correction).
+    @discardableResult
+    func deleteRecord(_ memberId: String, kind: String, recordId: String) async throws -> EmptyResponse {
+        try await delete("/members/\(memberId)/records/\(kind)/\(recordId)")
+    }
+}
+
+struct Preferences: Decodable { let pushEnabled: Bool; let reminderLeadHours: Int }
+private struct PreferencesBody: Encodable { let pushEnabled: Bool; let reminderLeadHours: Int }
+
+extension APIClient {
     func getNotifications() async throws -> NotificationsResponse {
         try await get("/notifications")
     }

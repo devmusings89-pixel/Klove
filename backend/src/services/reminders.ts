@@ -69,9 +69,11 @@ export async function autoGenerateReminders(): Promise<number> {
     if (!a.startsAt) continue;
     const existing = await prisma.reminder.findFirst({ where: { sourceAppointmentId: a.id, status: { not: "cancelled" } } });
     if (existing) continue;
-    // Fire 24h before (or right away if the visit is sooner than a day out).
-    const dayBefore = new Date(a.startsAt.getTime() - 86_400_000);
-    const fireAt = dayBefore > now ? dayBefore : now;
+    // Fire `reminderLeadHours` before (or right away if the visit is sooner than that).
+    const pref = await prisma.user.findUnique({ where: { id: a.userId }, select: { reminderLeadHours: true } });
+    const leadMs = (pref?.reminderLeadHours ?? 24) * 3_600_000;
+    const before = new Date(a.startsAt.getTime() - leadMs);
+    const fireAt = before > now ? before : now;
     await prisma.reminder.create({
       data: {
         subjectUserId: a.userId,

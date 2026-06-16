@@ -19,6 +19,13 @@ struct MemberTimelineView: View {
                 } else {
                     ForEach(entries) { entry in
                         TimelineRow(entry: entry)
+                            .contextMenu {
+                                if canCorrect(entry) {
+                                    Button(role: .destructive) { Task { await removeRecord(entry) } } label: {
+                                        Label("Remove this record", systemImage: "trash")
+                                    }
+                                }
+                            }
                     }
                 }
             }
@@ -35,6 +42,17 @@ struct MemberTimelineView: View {
         loading = true
         defer { loading = false }
         entries = (try? await api.memberTimeline(memberId)) ?? []
+    }
+
+    /// Records the operator can correct (delete) — the deterministic FHIR-lite kinds.
+    private func canCorrect(_ e: TimelineEntry) -> Bool {
+        ["observation", "condition", "medication", "allergy", "appointment"].contains(e.kind)
+    }
+
+    private func removeRecord(_ e: TimelineEntry) async {
+        if (try? await api.deleteRecord(memberId, kind: e.kind, recordId: e.id)) != nil {
+            entries.removeAll { $0.id == e.id }
+        }
     }
 
     private var emptyState: some View {
