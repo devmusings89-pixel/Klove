@@ -106,6 +106,35 @@ export async function buildTimeline(userId: string): Promise<TimelineEntry[]> {
   return entries;
 }
 
+export interface Series {
+  display: string;
+  unit: string | null;
+  points: { date: string; value: number }[];
+}
+
+/** A numeric trend for a "show me" query (e.g. "blood pressure", "A1c") — drives a chart. */
+export async function buildSeries(userId: string, query: string): Promise<Series | null> {
+  const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 2);
+  if (!terms.length) return null;
+  const obs = await prisma.observation.findMany({
+    where: { userId, valueNum: { not: null } },
+    orderBy: [{ effectiveAt: "asc" }, { recordedAt: "asc" }],
+  });
+  const matches = obs.filter((o) => terms.some((t) => o.display.toLowerCase().includes(t)));
+  if (matches.length < 2) return null;
+  // Pick the single most-frequent measurement among the matches so the chart is one clean line.
+  const counts = new Map<string, number>();
+  for (const o of matches) counts.set(o.display, (counts.get(o.display) ?? 0) + 1);
+  const display = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  const series = matches.filter((o) => o.display === display);
+  if (series.length < 2) return null;
+  return {
+    display,
+    unit: series[0].unit,
+    points: series.map((o) => ({ date: (o.effectiveAt ?? o.recordedAt).toISOString(), value: o.valueNum! })),
+  };
+}
+
 export interface GraphSummary {
   member: { userId: string };
   counts: { conditions: number; medications: number; observations: number; appointments: number; allergies: number };

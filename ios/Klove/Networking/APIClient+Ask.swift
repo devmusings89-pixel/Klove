@@ -11,6 +11,21 @@ struct ShowMeResult: Decodable {
     let title: String
     let count: Int
     let entries: [TimelineEntry]
+    let series: ShowMeSeries?
+}
+
+/// A numeric trend for charting (e.g. blood pressure over time).
+struct ShowMeSeries: Decodable {
+    let display: String
+    let unit: String?
+    let points: [Point]
+
+    struct Point: Decodable, Identifiable {
+        let date: String
+        let value: Double
+        var id: String { date }
+        var parsedDate: Date { ISO8601DateFormatter().date(from: date) ?? Date() }
+    }
 }
 
 extension APIClient {

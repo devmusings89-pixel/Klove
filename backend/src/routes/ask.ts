@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { prisma } from "../db.js";
 import { requireUser, resolveSubject, isConsentError } from "../services/auth.js";
 import { accessibleSubjects } from "../services/household.js";
-import { buildTimeline } from "../services/graph.js";
+import { buildTimeline, buildSeries } from "../services/graph.js";
 import { triageAsk } from "../services/triage.js";
 
 /**
@@ -63,7 +63,8 @@ export async function askRoutes(app: FastifyInstance) {
       const entries = terms.length
         ? timeline.filter((e) => terms.some((t) => e.title.toLowerCase().includes(t) || (e.detail ?? "").toLowerCase().includes(t)))
         : timeline.slice(0, 20);
-      return reply.send({ title: query || "Recent activity", count: entries.length, entries });
+      const series = query ? await buildSeries(userId, query) : null;
+      return reply.send({ title: query || "Recent activity", count: entries.length, entries, series });
     },
   );
 }

@@ -1,4 +1,5 @@
 import SwiftUI
+import Charts
 
 /// On-demand "Show me" view for one member — a focused, grounded answer pulled from the record.
 /// Data on pull, never a dashboard: ask, see, act, let it go.
@@ -33,9 +34,10 @@ struct ShowMeView: View {
                 if loading {
                     ProgressView().frame(maxWidth: .infinity).padding(.top, 30)
                 } else if let r = result {
-                    if r.entries.isEmpty {
+                    if let s = r.series { trendChart(s) }
+                    if r.entries.isEmpty && r.series == nil {
                         Text("Nothing on file for \"\(r.title)\" yet.").font(.subheadline).foregroundStyle(Theme.inkSecondary).kloveCard()
-                    } else {
+                    } else if !r.entries.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
                             Text("\(r.count) result\(r.count == 1 ? "" : "s") for \"\(r.title)\"")
                                 .font(.caption).foregroundStyle(Theme.inkSecondary)
@@ -67,6 +69,21 @@ struct ShowMeView: View {
         loading = true
         defer { loading = false }
         result = try? await api.showMe(memberId, query: query)
+    }
+
+    private func trendChart(_ s: ShowMeSeries) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(s.display + (s.unit.map { " (\($0))" } ?? "")).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
+            Chart(s.points) { p in
+                LineMark(x: .value("Date", p.parsedDate), y: .value("Value", p.value))
+                    .foregroundStyle(Theme.accent)
+                PointMark(x: .value("Date", p.parsedDate), y: .value("Value", p.value))
+                    .foregroundStyle(Theme.accent)
+            }
+            .frame(height: 180)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .kloveCard()
     }
 }
 
