@@ -37,6 +37,16 @@ struct AppointmentDetailView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .kloveCard()
+                } else {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("Confirmed with the office", systemImage: "checkmark.seal.fill")
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.handled)
+                        if let c = appt.confirmation, !c.isEmpty {
+                            Text("Confirmation \(c)").font(.caption).foregroundStyle(Theme.inkSecondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .kloveCard()
                 }
 
                 if let note { Text(note).font(.caption).foregroundStyle(Theme.handled).kloveCard() }

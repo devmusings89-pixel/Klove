@@ -9,6 +9,7 @@ struct MemberMedication: Decodable, Identifiable, Hashable {
     let nextRefillDue: String?
     let refillsRemaining: Int?
     let schedule: MedSchedule?
+    var adherence7d: MedAdherence? = nil
     let todaysDoses: [Dose]
 
     var refillDisplay: String? {
@@ -25,17 +26,33 @@ struct MedSchedule: Decodable, Hashable {
     let critical: Bool
 }
 
+/// 7-day taken/missed counts for a single medication.
+struct MedAdherence: Decodable, Hashable {
+    let taken: Int
+    let missed: Int
+}
+
 struct Dose: Decodable, Identifiable, Hashable {
     let id: String
     let scheduledAt: String
     let status: String    // pending | taken | missed | skipped
     let takenAt: String?
+    var timeLabel: String? = nil   // pre-formatted in the MEMBER's timezone by the backend
 
+    /// Prefer the server's member-timezone label; fall back to local formatting if absent.
     var timeDisplay: String {
+        if let l = timeLabel, !l.isEmpty { return l }
         guard let d = ISO8601.parse(scheduledAt) else { return "" }
         let f = DateFormatter(); f.dateFormat = "h:mm a"
         return f.string(from: d)
     }
+}
+
+/// GET /members/:id/medications — medications plus the member's timezone (dose times are already
+/// formatted in that zone server-side).
+struct MedicationsResponse: Decodable {
+    let timezone: String
+    let medications: [MemberMedication]
 }
 
 /// 7-day adherence summary (GET /members/:id/adherence).

@@ -18,6 +18,8 @@ export async function medicationRoutes(app: FastifyInstance) {
   app.get<{ Params: { id: string } }>("/members/:id/medications", { preHandler: requireUser }, async (req, reply) => {
     const userId = await subjectOr403(req, reply, req.params.id, "view");
     if (!userId) return;
+    const member = await prisma.user.findUnique({ where: { id: userId }, select: { timezone: true } });
+    const tz = member?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
     const meds = await prisma.medicationStatement.findMany({
       where: { userId },
       orderBy: { recordedAt: "desc" },
@@ -29,23 +31,36 @@ export async function medicationRoutes(app: FastifyInstance) {
       where: { subjectUserId: userId, scheduledAt: { gte: startOfDay } },
       orderBy: { scheduledAt: "asc" },
     });
-    return meds.map((m) => {
-      const schedule = m.schedules[0] ?? null;
-      return {
-        id: m.id,
-        display: m.display,
-        dosage: m.dosage,
-        status: m.status,
-        nextRefillDue: m.nextRefillDue,
-        refillsRemaining: m.refillsRemaining,
-        schedule: schedule
-          ? { id: schedule.id, times: fromJson<string[]>(schedule.times, []), active: schedule.active, critical: schedule.critical }
-          : null,
-        todaysDoses: todaysDoses
-          .filter((d) => d.medicationId === m.id)
-          .map((d) => ({ id: d.id, scheduledAt: d.scheduledAt, status: d.status, takenAt: d.takenAt })),
-      };
-    });
+    // 7-day per-medication adherence so a caregiver can see WHICH med is being missed.
+    const since = new Date(Date.now() - 7 * 86_400_000);
+    const recentDoses = await prisma.doseLog.findMany({ where: { subjectUserId: userId, scheduledAt: { gte: since } } });
+    const adherenceFor = (medId: string) => {
+      const rows = recentDoses.filter((d) => d.medicationId === medId);
+      return { taken: rows.filter((d) => d.status === "taken").length, missed: rows.filter((d) => d.status === "missed").length };
+    };
+    // Pre-format dose times in the MEMBER's timezone so the client can't drift to device-local time.
+    const timeLabel = (d: Date) => d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: tz });
+    return {
+      timezone: tz,
+      medications: meds.map((m) => {
+        const schedule = m.schedules[0] ?? null;
+        return {
+          id: m.id,
+          display: m.display,
+          dosage: m.dosage,
+          status: m.status,
+          nextRefillDue: m.nextRefillDue,
+          refillsRemaining: m.refillsRemaining,
+          schedule: schedule
+            ? { id: schedule.id, times: fromJson<string[]>(schedule.times, []), active: schedule.active, critical: schedule.critical }
+            : null,
+          adherence7d: adherenceFor(m.id),
+          todaysDoses: todaysDoses
+            .filter((d) => d.medicationId === m.id)
+            .map((d) => ({ id: d.id, scheduledAt: d.scheduledAt, status: d.status, takenAt: d.takenAt, timeLabel: timeLabel(d.scheduledAt) })),
+        };
+      }),
+    };
   });
 
   // Create or replace the dosing schedule for a medication (times = ["08:00","18:00"]).

@@ -13,6 +13,7 @@ struct AppointmentBriefView: View {
     @State private var booking = false
     @State private var booked = false
     @State private var provisional = false
+    @State private var inProgress = false
     @State private var confirmation: String?
     private let api = APIClient()
 
@@ -124,6 +125,13 @@ struct AppointmentBriefView: View {
                     Text("Klove hasn't confirmed this with the office yet — you'll be updated in Today when it's confirmed.")
                         .font(.caption).foregroundStyle(Theme.inkSecondary).multilineTextAlignment(.center)
                 }
+            } else if booked && inProgress {
+                VStack(spacing: 4) {
+                    Label("Klove is contacting the office", systemImage: "phone.arrow.up.right.fill")
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.accent)
+                    Text("Nothing is confirmed yet — watch progress in Today & Actions; you'll be updated when it's booked.")
+                        .font(.caption).foregroundStyle(Theme.inkSecondary).multilineTextAlignment(.center)
+                }
             } else if booked {
                 VStack(spacing: 4) {
                     Label("Booked by Klove", systemImage: "checkmark.seal.fill")
@@ -166,6 +174,7 @@ struct AppointmentBriefView: View {
         if let outcome = try? await api.bookForMember(memberId, reason: reason, provider: brief?.appointment?.provider, preferredDate: brief?.appointment?.startsAt) {
             confirmation = outcome.confirmation
             provisional = outcome.isProvisional
+            inProgress = outcome.isInProgress
             booked = true
         }
     }

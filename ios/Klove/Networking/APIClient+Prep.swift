@@ -54,6 +54,8 @@ struct BookingOutcome: Decodable {
     var isConfirmed: Bool { status == "confirmed" }
     /// A confirmed booking that Klove placed WITHOUT a live call — a hold, not an office confirmation.
     var isProvisional: Bool { status == "confirmed" && verified == false }
+    /// A live booking still in flight — Klove is contacting the office; nothing is confirmed yet.
+    var isInProgress: Bool { status == "in_progress" }
 
     var whenDisplay: String {
         guard let s = startsAt, let d = ISO8601.parse(s) else { return "soon" }

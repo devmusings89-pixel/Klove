@@ -34,6 +34,7 @@ struct UpcomingAppt: Decodable, Identifiable, Hashable {
     let subjectUserId: String?
     let memberName: String?
     var verified: Bool? = nil
+    var confirmation: String? = nil
 
     /// A provisional hold Klove placed without a live office confirmation.
     var isProvisional: Bool { verified == false }

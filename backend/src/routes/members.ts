@@ -29,8 +29,11 @@ export async function memberRoutes(app: FastifyInstance) {
       const householdId = await ensureHousehold(operatorUserId);
       const managedMember = memberType !== "consenting_adult"; // adults bring their own login on accept
 
+      // Managed members inherit the operator's timezone so dose reminders fire in the right local
+      // time (the operator manages on their behalf and they typically share a locale).
+      const operator = await prisma.user.findUnique({ where: { id: operatorUserId }, select: { timezone: true } });
       const member = await prisma.user.create({
-        data: { displayName: displayName.trim(), managed: true, managedByUserId: operatorUserId },
+        data: { displayName: displayName.trim(), managed: true, managedByUserId: operatorUserId, timezone: operator?.timezone ?? null },
       });
       await prisma.householdMembership.create({
         data: { householdId, userId: member.id, relationship: relationship || "other", memberType },

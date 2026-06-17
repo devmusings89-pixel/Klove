@@ -86,36 +86,51 @@ async function memberContext(userId: string): Promise<{ name: string; tz: string
 export async function runMedicationDoseTick(now: Date = new Date()): Promise<number> {
   const schedules = await prisma.medicationSchedule.findMany({ where: { active: true }, take: 500 });
   let created = 0;
+  // Collect fresh reminders per member so a polypharmacy member gets ONE batched push, not 6+.
+  const reminders = new Map<string, { labels: string[]; critical: boolean }>();
   for (const sched of schedules) {
     try {
       const { tz } = await memberContext(sched.subjectUserId);
       const times = fromJson<string[]>(sched.times, []);
-      for (const t of times) {
-        const scheduledAt = zonedSlotToday(now, t, tz);
-        if (!scheduledAt || scheduledAt.getTime() > now.getTime()) continue; // not due yet today
-        const existing = await prisma.doseLog.findUnique({
-          where: { scheduleId_scheduledAt: { scheduleId: sched.id, scheduledAt } },
-        });
-        if (existing) continue;
-        await prisma.doseLog.create({
-          data: {
-            scheduleId: sched.id,
-            medicationId: sched.medicationId,
-            subjectUserId: sched.subjectUserId,
-            label: sched.label,
-            scheduledAt,
-            status: "pending",
-          },
-        });
-        created++;
-        const ageMin = (now.getTime() - scheduledAt.getTime()) / 60_000;
-        if (ageMin <= FRESH_REMINDER_MIN) {
-          await sendPushToUser(sched.subjectUserId, "Time for your medication", `${sched.label} — ${whenLabel(scheduledAt, tz)} dose`);
+      // Cover today AND yesterday so a slot the worker was down for (e.g. overnight) still gets a
+      // DoseLog and can be flagged missed — never silently skipped across an outage/midnight.
+      const bases = [now, new Date(now.getTime() - 86_400_000)];
+      for (const base of bases) {
+        for (const t of times) {
+          const scheduledAt = zonedSlotToday(base, t, tz);
+          if (!scheduledAt || scheduledAt.getTime() > now.getTime()) continue; // not due yet
+          const existing = await prisma.doseLog.findUnique({
+            where: { scheduleId_scheduledAt: { scheduleId: sched.id, scheduledAt } },
+          });
+          if (existing) continue;
+          await prisma.doseLog.create({
+            data: {
+              scheduleId: sched.id,
+              medicationId: sched.medicationId,
+              subjectUserId: sched.subjectUserId,
+              label: sched.label,
+              scheduledAt,
+              status: "pending",
+            },
+          });
+          created++;
+          const ageMin = (now.getTime() - scheduledAt.getTime()) / 60_000;
+          if (ageMin <= FRESH_REMINDER_MIN) {
+            const entry = reminders.get(sched.subjectUserId) ?? { labels: [], critical: false };
+            entry.labels.push(sched.label);
+            entry.critical = entry.critical || sched.critical;
+            reminders.set(sched.subjectUserId, entry);
+          }
         }
       }
     } catch (err) {
       console.error("dose tick failed for schedule", sched.id, err);
     }
+  }
+  // One batched push per member; critical meds force past the quiet-notification preference.
+  for (const [subjectUserId, { labels, critical }] of reminders) {
+    const body = labels.length === 1 ? `Time for ${labels[0]}` : `Time for ${labels.length} medications: ${labels.join(", ")}`;
+    await sendPushToUser(subjectUserId, "Medication reminder", body, critical).catch((e) => console.error("dose reminder push failed", e));
   }
   return created;
 }
@@ -184,9 +199,14 @@ export async function runRefillTick(now: Date = new Date()): Promise<number> {
       const care = await caregiverFor(med.userId);
       if (!care || !med.nextRefillDue) continue;
       const dueLabel = med.nextRefillDue.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
-      // Idempotency keyed on this specific due date — a later cycle (new date) nudges again.
+      // Idempotency keyed on THIS medication AND this specific due date, so (a) a later refill cycle
+      // (new date) nudges again, and (b) two meds sharing a due date don't suppress each other.
       const already = await prisma.message.findFirst({
-        where: { householdId: care.householdId, title: "Refill due soon", body: { contains: dueLabel } },
+        where: {
+          householdId: care.householdId,
+          title: "Refill due soon",
+          AND: [{ body: { contains: med.display } }, { body: { contains: dueLabel } }],
+        },
       });
       if (already) continue;
       const { name } = await memberContext(med.userId);

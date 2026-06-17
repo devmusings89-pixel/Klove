@@ -39,6 +39,7 @@ extension APIClient {
 
     @discardableResult
     func registerDevice(token: String) async throws -> EmptyResponse {
-        try await post("/devices/token", body: ["token": token])
+        // Send the device timezone so medication doses are scheduled in the user's local time.
+        try await post("/devices/token", body: ["token": token, "timezone": TimeZone.current.identifier])
     }
 }

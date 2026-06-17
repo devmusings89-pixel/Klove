@@ -51,6 +51,7 @@ export async function todayRoutes(app: FastifyInstance) {
         subjectUserId: a.userId,
         memberName: nameById.get(a.userId) ?? "Member",
         verified: a.verified,
+        confirmation: a.confirmation,
       })),
       members: subjects,
     };

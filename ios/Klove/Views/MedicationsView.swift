@@ -99,6 +99,11 @@ struct MedicationsView: View {
                     .font(.caption).foregroundStyle(Theme.inkSecondary)
             }
 
+            if let a = med.adherence7d, a.missed > 0 {
+                Label("\(a.missed) missed in the last 7 days", systemImage: "exclamationmark.circle")
+                    .font(.caption.weight(.semibold)).foregroundStyle(Theme.needsYou)
+            }
+
             if !med.todaysDoses.isEmpty {
                 Divider()
                 Text("Today").font(.caption.weight(.semibold)).foregroundStyle(Theme.inkSecondary)

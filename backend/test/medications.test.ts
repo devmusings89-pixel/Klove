@@ -48,16 +48,19 @@ test("dose tick creates one pending DoseLog for a due time and is idempotent", a
 
   const now = new Date();
   now.setHours(8, 30, 0, 0); // 30 min after the 08:00 dose — within the due window
-  // Scope assertions to this member (the tick is global and the shared DB may hold other rows).
+  // The tick covers today AND yesterday (outage safety), so assert today's dose + idempotency
+  // rather than a fixed total. Scope to this member (the tick is global, shared DB).
   assert.ok((await runMedicationDoseTick(now)) >= 1);
-  assert.equal(await prisma.doseLog.count({ where: { subjectUserId: memberId } }), 1);
+  const afterFirst = await prisma.doseLog.count({ where: { subjectUserId: memberId } });
   await runMedicationDoseTick(now);
-  assert.equal(await prisma.doseLog.count({ where: { subjectUserId: memberId } }), 1, "idempotent for this member");
+  assert.equal(await prisma.doseLog.count({ where: { subjectUserId: memberId } }), afterFirst, "idempotent for this member");
 
-  const dose = await prisma.doseLog.findFirst({ where: { subjectUserId: memberId } });
-  assert.equal(dose?.status, "pending");
-  assert.equal(dose?.scheduledAt.getHours(), 8);
-  assert.equal(dose?.scheduledAt.getMinutes(), 0);
+  const startOfToday = new Date(now);
+  startOfToday.setHours(0, 0, 0, 0);
+  const todayDose = await prisma.doseLog.findFirst({ where: { subjectUserId: memberId, scheduledAt: { gte: startOfToday } } });
+  assert.equal(todayDose?.status, "pending");
+  assert.equal(todayDose?.scheduledAt.getHours(), 8);
+  assert.equal(todayDose?.scheduledAt.getMinutes(), 0);
 });
 
 test("missed-dose tick marks overdue doses missed and alerts the caregiver", async () => {

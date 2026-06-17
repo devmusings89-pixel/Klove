@@ -3,7 +3,8 @@ import Foundation
 /// Medication schedules, dose logging, and adherence.
 extension APIClient {
     func memberMedications(_ memberId: String) async throws -> [MemberMedication] {
-        try await get("/members/\(memberId)/medications")
+        let response: MedicationsResponse = try await get("/members/\(memberId)/medications")
+        return response.medications
     }
 
     func setMedicationSchedule(_ medId: String, times: [String], critical: Bool) async throws -> MedSchedule {
