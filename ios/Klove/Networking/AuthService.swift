@@ -113,6 +113,18 @@ final class AuthService: NSObject {
     }
 
     /// Create a Supabase account with email + password.
+    ///
+    /// TODO(auth-email-confirmation): email confirmation is currently DISABLED in the Supabase
+    /// dashboard (Authentication → Providers → Email → "Confirm email" OFF) so signup returns a
+    /// session immediately and this flow logs the user straight in. To re-enable confirmation for
+    /// production:
+    ///   1. Supabase → URL Configuration: set a real Site URL (not localhost:3000) and add
+    ///      `klove://auth-callback` to the Redirect URLs allowlist.
+    ///   2. Pass `email_redirect_to=klove://auth-callback` in the signup body below, and add a
+    ///      deep-link handler (onOpenURL) that finishes the session from the callback (mirroring
+    ///      the Google `signInWithGoogle` fragment/state handling).
+    ///   3. Configure custom SMTP + Klove-branded templates so links come from klove.app and clear
+    ///      corporate link-scanners (which otherwise pre-consume the one-time OTP → otp_expired).
     @discardableResult
     func signUpWithEmail(_ email: String, _ password: String) async -> Bool {
         await emailAuth(path: "/auth/v1/signup", email: email, password: password, isSignup: true)
