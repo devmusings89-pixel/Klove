@@ -11,7 +11,15 @@ final class AuthService: NSObject {
     static let shared = AuthService()
 
     var errorMessage: String?
+    /// Observable session flag. Auth success flips this to true WITHOUT completing onboarding, so the
+    /// onboarding flow can keep collecting details (name/DOB/family/records) before `hasOnboarded`.
+    var isAuthenticated = false
     private var currentNonce: String?
+
+    override init() {
+        super.init()
+        isAuthenticated = isSignedIn
+    }
     /// One-time CSRF nonce for the Google OAuth web flow; verified against the callback's `state`.
     private var oauthState: String?
 
@@ -65,8 +73,9 @@ final class AuthService: NSObject {
                 }
                 Task { await exchangeWithSupabase(idToken: idToken) }
             } else {
-                // Mock/dev build: the Apple-derived email identity is enough.
-                UserDefaults.standard.set(true, forKey: AppStorageKey.hasOnboarded)
+                // Mock/dev build: the Apple-derived email identity is enough to authenticate; the
+                // onboarding flow then collects the user's details before finishing.
+                isAuthenticated = true
             }
         }
     }
@@ -108,7 +117,7 @@ final class AuthService: NSObject {
         }
         KeychainStore.set(token, for: AppStorageKey.authToken)
         UserDefaults.standard.set(Self.emailFromJWT(token) ?? "you@gmail.com", forKey: AppStorageKey.userEmail)
-        UserDefaults.standard.set(true, forKey: AppStorageKey.hasOnboarded)
+        isAuthenticated = true
         errorMessage = nil
     }
 
@@ -175,7 +184,7 @@ final class AuthService: NSObject {
         if let token = json?["access_token"] as? String {
             KeychainStore.set(token, for: AppStorageKey.authToken)
             UserDefaults.standard.set(Self.emailFromJWT(token) ?? email, forKey: AppStorageKey.userEmail)
-            UserDefaults.standard.set(true, forKey: AppStorageKey.hasOnboarded)
+            isAuthenticated = true
             errorMessage = nil
             return true
         }
@@ -192,6 +201,7 @@ final class AuthService: NSObject {
         KeychainStore.remove(AppStorageKey.authToken)
         UserDefaults.standard.removeObject(forKey: AppStorageKey.userEmail)
         UserDefaults.standard.set(false, forKey: AppStorageKey.hasOnboarded)
+        isAuthenticated = false
         currentNonce = nil
         oauthState = nil
         // Drop any per-user cached state so the next account starts clean.
@@ -237,7 +247,7 @@ final class AuthService: NSObject {
             return
         }
         KeychainStore.set(token, for: AppStorageKey.authToken)
-        UserDefaults.standard.set(true, forKey: AppStorageKey.hasOnboarded)
+        isAuthenticated = true
         errorMessage = nil
     }
 

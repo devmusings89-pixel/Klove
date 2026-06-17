@@ -36,6 +36,11 @@ struct OnboardingView: View {
                 .padding(.bottom, 12)
         }
         .animation(.snappy, value: model.step)
+        // When auth succeeds on the identify step, continue the flow (collect details) instead of
+        // jumping into the app — AuthService no longer flips hasOnboarded on sign-in.
+        .onChange(of: AuthService.shared.isAuthenticated) { _, signedIn in
+            if signedIn, model.step == .identify { model.advance() }
+        }
     }
 
     // MARK: - Step content
@@ -46,10 +51,60 @@ struct OnboardingView: View {
         case .welcome: welcome
         case .value: value
         case .identify: identify
+        case .aboutYou: aboutYou
         case .family: family
         case .connect: connect
         case .channels: channels
         }
+    }
+
+    private var aboutYou: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            Text("Tell us about you").font(.largeTitle.bold())
+            Text("This personalizes your records and lets Klove book visits on your behalf.")
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Your name").font(.subheadline.weight(.semibold))
+                TextField("Full name", text: $model.fullName)
+                    .textContentType(.name)
+                    .textInputAutocapitalization(.words)
+                    .padding()
+                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Date of birth").font(.subheadline.weight(.semibold))
+                DatePicker("Date of birth", selection: $model.birthDate, in: ...Date(), displayedComponents: .date)
+                    .labelsHidden()
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Who are you setting up Klove for?").font(.subheadline.weight(.semibold))
+                ForEach(OnboardingModel.SetupScope.allCases) { scope in
+                    Button { model.setupFor = scope } label: { scopeCard(scope) }
+                        .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func scopeCard(_ scope: OnboardingModel.SetupScope) -> some View {
+        let selected = model.setupFor == scope
+        return HStack(spacing: 14) {
+            Image(systemName: scope.icon)
+                .font(.title2).foregroundStyle(selected ? Theme.accent : .secondary).frame(width: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(scope.title).font(.headline).foregroundStyle(.primary)
+                Text(scope.subtitle).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(selected ? Theme.accent : Color(.systemGray3))
+        }
+        .padding(14)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(selected ? Theme.accent : .clear, lineWidth: 2))
     }
 
     private var family: some View {
@@ -193,9 +248,9 @@ struct OnboardingView: View {
 
     private var connect: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Bring in your health data")
+            Text("Import your health records")
                 .font(.largeTitle.bold())
-            Text("Connect any sources you like — you can add more later.")
+            Text("Connect Apple Health, a patient portal, or upload documents — you can add more anytime. Uploading a document is the quickest way to see Klove work.")
                 .foregroundStyle(.secondary)
 
             ConnectSourcesView(model: model.sources)
@@ -217,27 +272,49 @@ struct OnboardingView: View {
             // only Log in or Register.
             if model.step != .identify {
                 Button(action: primaryAction) {
-                    Text(model.step.isLast ? "Finish" : "Continue")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
+                    Group {
+                        if model.savingProfile { ProgressView() } else { Text(primaryTitle) }
+                    }
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
                 }
                 .buttonStyle(.borderedProminent)
                 .buttonBorderShape(.capsule)
+                .disabled(primaryDisabled)
             }
 
             if model.step.isLast {
                 Button("Skip for now", action: { model.finish() })
                     .font(.subheadline)
-            } else if model.step != .welcome {
+            } else if model.step != .welcome, model.step != .identify {
                 Button("Back", action: { model.back() })
                     .font(.subheadline)
             }
         }
     }
 
+    private var primaryTitle: String {
+        if model.step.isLast { return "Finish" }
+        // On the family step, "Continue" reads as skippable; make the optionality explicit.
+        if model.step == .family { return model.addedMembers.isEmpty ? "Skip for now" : "Continue" }
+        return "Continue"
+    }
+
+    private var primaryDisabled: Bool {
+        if model.savingProfile { return true }
+        // Require a name before saving the profile on the About-you step.
+        if model.step == .aboutYou { return model.fullName.trimmingCharacters(in: .whitespaces).isEmpty }
+        return false
+    }
+
     private func primaryAction() {
-        if model.step.isLast { model.finish() } else { model.advance() }
+        switch model.step {
+        case .aboutYou:
+            Task { await model.saveAboutYouAndAdvance() }
+        default:
+            if model.step.isLast { model.finish() } else { model.advance() }
+        }
     }
 }
 

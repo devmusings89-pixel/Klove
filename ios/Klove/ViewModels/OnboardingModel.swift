@@ -3,17 +3,37 @@ import Foundation
 @MainActor
 @Observable
 final class OnboardingModel {
-    /// Ordered onboarding steps.
+    /// Ordered onboarding steps. After signing in, we collect the user's own details, who they're
+    /// setting up for, the family they manage, and the health records to import.
     enum Step: Int, CaseIterable {
-        case welcome, value, identify, family, connect, channels
+        case welcome, value, identify, aboutYou, family, connect, channels
 
         var isLast: Bool { self == Step.allCases.last }
+    }
+
+    /// Who the operator is setting Klove up for — gates whether we ask about family members.
+    enum SetupScope: String, CaseIterable, Identifiable {
+        case myself, family
+        var id: String { rawValue }
+        var title: String { self == .myself ? "Just me" : "Me & my family" }
+        var subtitle: String {
+            self == .myself
+                ? "Track your own records, appointments, and medications."
+                : "Also coordinate care for kids, a partner, or aging parents."
+        }
+        var icon: String { self == .myself ? "person.fill" : "person.2.fill" }
     }
 
     var step: Step = .welcome
     var email: String = UserDefaults.standard.string(forKey: AppStorageKey.userEmail) ?? ""
     var password: String = ""
     var identifyError: String?
+
+    // About-you step
+    var fullName = ""
+    var birthDate = Calendar.current.date(byAdding: .year, value: -40, to: Date()) ?? Date()
+    var setupFor: SetupScope = .myself
+    var savingProfile = false
 
     /// Source connection is shared with Settings via SourcesModel.
     let sources = SourcesModel()
@@ -28,13 +48,53 @@ final class OnboardingModel {
     // Channels step
     var pushEnabled = true
 
+    init() {
+        // Resume cleanly: a user who authenticated but didn't finish onboarding (e.g. force-quit)
+        // shouldn't be made to re-authenticate — drop them at the details step.
+        if AuthService.shared.isAuthenticated || AuthService.shared.isSignedIn {
+            step = .aboutYou
+            Task { await prefillProfile() }
+        }
+    }
+
     // MARK: - Navigation
 
     func advance() {
         if step == .identify, !saveIdentity() { return }
-        if let next = Step(rawValue: step.rawValue + 1) {
-            step = next
-            if step == .connect { Task { await sources.loadSources() } }
+        goToNext()
+    }
+
+    /// Save the user's own details, then continue (skipping the family step when it's just them).
+    func saveAboutYouAndAdvance() async {
+        savingProfile = true
+        defer { savingProfile = false }
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.timeZone = TimeZone(identifier: "UTC")
+        _ = try? await api.putProfile(
+            fullName: fullName.trimmingCharacters(in: .whitespaces),
+            dob: f.string(from: birthDate),
+            phone: nil,
+            email: email.isEmpty ? nil : email,
+            address: nil,
+        )
+        goToNext()
+    }
+
+    private func goToNext() {
+        guard var next = Step(rawValue: step.rawValue + 1) else { return }
+        // No family to add when setting up for just yourself — skip straight to records.
+        if next == .family, setupFor == .myself { next = .connect }
+        step = next
+        if step == .connect { Task { await sources.loadSources() } }
+    }
+
+    /// Prefill the name/DOB from an existing profile so returning users don't retype.
+    private func prefillProfile() async {
+        guard fullName.isEmpty else { return }
+        guard let p = try? await api.getProfile() else { return }
+        if fullName.isEmpty { fullName = p.fullName }
+        if let d = p.dob, !d.isEmpty {
+            let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.timeZone = TimeZone(identifier: "UTC")
+            if let date = f.date(from: d) { birthDate = date }
         }
     }
 
@@ -51,7 +111,10 @@ final class OnboardingModel {
     }
 
     func back() {
-        if let prev = Step(rawValue: step.rawValue - 1) { step = prev }
+        guard var prev = Step(rawValue: step.rawValue - 1) else { return }
+        // Mirror the forward skip: don't land on the family step when it's just them.
+        if prev == .family, setupFor == .myself { prev = .aboutYou }
+        step = prev
     }
 
     // MARK: - Identity
