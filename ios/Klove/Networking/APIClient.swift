@@ -177,7 +177,7 @@ struct APIClient {
         return try await send(req)
     }
 
-    private func put<B: Encodable, R: Decodable>(_ path: String, body: B) async throws -> R {
+    func put<B: Encodable, R: Decodable>(_ path: String, body: B) async throws -> R {
         try await sendBody(path, method: "PUT", body: body)
     }
 

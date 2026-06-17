@@ -71,16 +71,22 @@ export async function memberRoutes(app: FastifyInstance) {
     if (!membership) return reply.code(404).send({ error: "not_found" });
 
     const self = membership.userId === operatorUserId;
-    const grant = self
-      ? null
-      : await prisma.consentGrant.findFirst({
-          where: { granteeUserId: operatorUserId, subjectUserId: membership.userId },
-          orderBy: { createdAt: "desc" },
-        });
+    const [grant, selfProfile] = await Promise.all([
+      self
+        ? Promise.resolve(null)
+        : prisma.consentGrant.findFirst({
+            where: { granteeUserId: operatorUserId, subjectUserId: membership.userId },
+            orderBy: { createdAt: "desc" },
+          }),
+      // Operator's own name (profile) when they never set a User.displayName — avoids bare "Me".
+      self
+        ? prisma.profile.findFirst({ where: { userId: operatorUserId }, orderBy: { isPrimary: "desc" }, select: { fullName: true } })
+        : Promise.resolve(null),
+    ]);
 
     return {
       userId: membership.userId,
-      displayName: membership.user.displayName ?? (self ? "Me" : null),
+      displayName: membership.user.displayName ?? (self ? selfProfile?.fullName?.trim() || "Me" : null),
       dob: membership.user.dob,
       relationship: membership.relationship,
       memberType: membership.memberType,

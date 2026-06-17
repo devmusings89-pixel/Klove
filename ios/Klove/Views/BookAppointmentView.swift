@@ -20,6 +20,12 @@ struct BookAppointmentView: View {
     @State private var booking = false
     @State private var outcome: BookingOutcome?
     @State private var errorMessage: String?
+    @State private var cards: [InsuranceCard] = []
+    @State private var selectedCardId: String?
+    @State private var officeMatch: OfficeMatch?
+    @State private var lookingUp = false
+    @State private var lookupTask: Task<Void, Never>?
+    @State private var showAddInsurance = false
     private let api = APIClient()
 
     init(memberId: String, memberName: String, allowMemberChange: Bool = false, onBooked: @escaping () -> Void = {}) {
@@ -49,27 +55,83 @@ struct BookAppointmentView: View {
                 }
             }
             .tint(Theme.accent)
+            .task { await loadCards() }
+            .sheet(isPresented: $showAddInsurance) {
+                AddInsuranceView(memberId: memberId, memberName: memberName, isFirstCard: cards.isEmpty) {
+                    Task { await loadCards() }
+                }
+            }
         }
     }
 
     private var form: some View {
         Form {
-            if allowMemberChange && !store.actionableMembers.isEmpty {
-                Section("Who is this for?") {
-                    Picker("Member", selection: $memberId) {
-                        ForEach(store.actionableMembers) { m in Text(m.name).tag(m.userId) }
+            Section {
+                if allowMemberChange && !store.actionableMembers.isEmpty {
+                    Picker("Patient", selection: $memberId) {
+                        ForEach(store.actionableMembers) { m in Text(m.displayLabel).tag(m.userId) }
                     }
                     .onChange(of: memberId) { _, new in
                         memberName = store.actionableMembers.first { $0.userId == new }?.name ?? memberName
+                        selectedCardId = nil
+                        Task { await loadCards() }
+                    }
+                } else {
+                    LabeledContent("Patient", value: memberName)
+                }
+            } header: {
+                Text("Booking for")
+            } footer: {
+                Text("This visit is booked in \(memberName)'s name.")
+            }
+
+            Section {
+                if cards.isEmpty {
+                    Text("No insurance on file for \(memberName). Offices ask for it to book.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button {
+                        showAddInsurance = true
+                    } label: {
+                        Label("Add an insurance card", systemImage: "creditcard.fill")
+                    }
+                    .tint(Theme.accent)
+                } else {
+                    Picker("Insurance card", selection: $selectedCardId) {
+                        ForEach(cards) { c in
+                            Text(c.label + (c.isPrimary ? " (primary)" : (c.isSecondary ? " (backup)" : ""))).tag(Optional(c.id))
+                        }
                     }
                 }
+            } header: {
+                Text("Insurance")
+            } footer: {
+                Text("Klove gives the office \(memberName)'s coverage — pick the right card (e.g. Medicare for a parent, the family plan for a child).")
             }
+
             Section("What's the visit for?") {
                 TextField("e.g. Annual physical, dermatology", text: $reason)
             }
-            Section("Provider or office (optional)") {
+            Section {
                 TextField("e.g. Dr. Lin, City Endocrinology", text: $provider)
                     .textInputAutocapitalization(.words)
+                    .onChange(of: provider) { _, new in scheduleLookup(new) }
+                if lookingUp {
+                    Label("Looking up the office…", systemImage: "magnifyingglass")
+                        .font(.caption).foregroundStyle(Theme.inkSecondary)
+                } else if let m = officeMatch {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label("Found \(m.displayName)", systemImage: "checkmark.circle.fill")
+                            .font(.caption.weight(.semibold)).foregroundStyle(Theme.handled)
+                        if let phone = m.phone { Text(phone).font(.caption2).foregroundStyle(Theme.inkSecondary) }
+                        if let address = m.address { Text(address).font(.caption2).foregroundStyle(Theme.inkSecondary) }
+                    }
+                } else if provider.trimmingCharacters(in: .whitespaces).count >= 3 {
+                    Label("Couldn't find that office — add a phone or website below so Klove can reach it.",
+                          systemImage: "questionmark.circle")
+                        .font(.caption).foregroundStyle(Theme.needsYou)
+                }
+            } header: {
+                Text("Provider or office (optional)")
             }
             Section {
                 TextField("Office phone", text: $phone).keyboardType(.phonePad)
@@ -98,6 +160,13 @@ struct BookAppointmentView: View {
                 Text(confTitle(o)).font(.title2.weight(.semibold)).foregroundStyle(Theme.ink)
                 Text("\(o.title)\(o.provider.map { " with \($0)" } ?? "")")
                     .font(.subheadline).foregroundStyle(Theme.ink).multilineTextAlignment(.center)
+                // Confirm WHO it's for and WHICH coverage Klove will give the office.
+                Label("For \(o.patientName ?? memberName)", systemImage: "person.fill")
+                    .font(.caption).foregroundStyle(Theme.inkSecondary)
+                if let ins = o.insurance, !ins.isEmpty {
+                    Label("Insurance: \(ins)", systemImage: "creditcard")
+                        .font(.caption).foregroundStyle(Theme.inkSecondary)
+                }
 
                 if o.isProvisional {
                     Text("Klove placed a provisional hold\(o.startsAt != nil ? " for \(o.whenDisplay)" : ""). It isn't confirmed with the office yet — Klove will confirm and update you in Today.")
@@ -144,12 +213,38 @@ struct BookAppointmentView: View {
                 provider: provider.isEmpty ? nil : provider,
                 preferredTimes: preferredTimes.isEmpty ? nil : preferredTimes,
                 phone: phone.isEmpty ? nil : phone,
-                website: website.isEmpty ? nil : website
+                website: website.isEmpty ? nil : website,
+                insurancePlanId: selectedCardId
             )
             store.bumpData()   // refresh Today/Actions so the booking shows up
             onBooked()
         } catch {
             errorMessage = (error as? AppError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Debounce office lookups as the user types so we don't fire a request per keystroke.
+    private func scheduleLookup(_ raw: String) {
+        lookupTask?.cancel()
+        let query = raw.trimmingCharacters(in: .whitespaces)
+        officeMatch = nil
+        guard query.count >= 3 else { lookingUp = false; return }
+        lookingUp = true
+        lookupTask = Task {
+            try? await Task.sleep(for: .milliseconds(450))
+            if Task.isCancelled { return }
+            let match = try? await api.lookupOffice(query)
+            if Task.isCancelled { return }
+            officeMatch = match
+            lookingUp = false
+        }
+    }
+
+    /// Load the patient's insurance wallet and default to their primary card.
+    private func loadCards() async {
+        cards = (try? await api.memberInsurance(memberId)) ?? []
+        if selectedCardId == nil || !cards.contains(where: { $0.id == selectedCardId }) {
+            selectedCardId = cards.first(where: { $0.isPrimary })?.id ?? cards.first?.id
         }
     }
 }

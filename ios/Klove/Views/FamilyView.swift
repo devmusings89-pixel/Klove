@@ -68,7 +68,7 @@ private struct MemberCard: View {
                 .background(Theme.accentSoft, in: Circle())
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(member.name).font(.headline).foregroundStyle(Theme.ink)
+                Text(member.displayLabel).font(.headline).foregroundStyle(Theme.ink)
                 Text(relationshipLabel).font(.caption).foregroundStyle(Theme.inkSecondary)
             }
 

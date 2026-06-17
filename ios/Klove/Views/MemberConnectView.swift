@@ -1,7 +1,8 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Per-member connections manager: see what's connected, connect HealthX (records connector), or
-/// capture a document. Apple Health on-device sync lands with Phase-5 entitlements.
+/// capture/upload a document. Apple Health on-device sync lands with Phase-5 entitlements.
 struct MemberConnectView: View {
     let memberId: String
     let memberName: String
@@ -9,6 +10,7 @@ struct MemberConnectView: View {
     @State private var sources: [SourceConnection] = []
     @State private var loading = true
     @State private var showCamera = false
+    @State private var showFileImporter = false
     @State private var busy = false
     @State private var message: String?
     @State private var webAuth = WebAuthCoordinator()
@@ -33,6 +35,10 @@ struct MemberConnectView: View {
         .task { await load() }
         .sheet(isPresented: $showCamera) {
             CameraPicker { data in Task { await upload(data) } }
+        }
+        .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.pdf, .image]) { result in
+            guard case .success(let url) = result else { return }
+            Task { await uploadFile(url) }
         }
     }
 
@@ -67,8 +73,11 @@ struct MemberConnectView: View {
             Text("Add a source").font(.headline).foregroundStyle(Theme.ink)
             connectRow(.aggregator, action: connectHealthX)
             connectRow(.gmail, action: connectEmail)
+            Button { showFileImporter = true } label: {
+                sourceRowLabel(icon: "doc.fill", title: "Upload a PDF or photo", subtitle: "Add a lab result, report, or form for \(memberName).")
+            }.buttonStyle(.plain).disabled(busy)
             Button { showCamera = true } label: {
-                sourceRowLabel(icon: "doc.viewfinder.fill", title: "Scan a document", subtitle: "Snap a lab result or form for \(memberName).")
+                sourceRowLabel(icon: "doc.viewfinder.fill", title: "Scan a document", subtitle: "Snap a paper lab result or form for \(memberName).")
             }.buttonStyle(.plain).disabled(busy)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -135,7 +144,24 @@ struct MemberConnectView: View {
         busy = true; defer { busy = false }
         do {
             _ = try await api.uploadForMember(memberId, data: data, mimeType: "image/jpeg", filename: "scan.jpg")
-            message = "Uploaded — Klove is reading it and will add it to the timeline."
+            message = "Uploaded — Klove is reading it and will add it to \(memberName)'s timeline."
+            await load()
+        } catch { message = "Upload failed." }
+    }
+
+    /// Import a PDF (or image) file and assign it to this member — a lab printout lands on the right
+    /// person's record, powering their timeline and appointment brief.
+    private func uploadFile(_ url: URL) async {
+        busy = true; defer { busy = false }
+        let access = url.startAccessingSecurityScopedResource()
+        defer { if access { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url) else { message = "Couldn't read that file."; return }
+        let isPDF = url.pathExtension.lowercased() == "pdf"
+        do {
+            _ = try await api.uploadForMember(memberId, data: data,
+                                              mimeType: isPDF ? "application/pdf" : "image/jpeg",
+                                              filename: url.lastPathComponent)
+            message = "Uploaded \(url.lastPathComponent) — Klove is reading it and will add it to \(memberName)'s timeline."
             await load()
         } catch { message = "Upload failed." }
     }

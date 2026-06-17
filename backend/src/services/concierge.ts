@@ -31,13 +31,16 @@ async function buildPatientInfo(
   const memberProfile = await prisma.profile.findFirst({
     where: { userId: subjectUserId },
     orderBy: { isPrimary: "desc" },
-    include: { insurance: true },
+    include: { insurance: { orderBy: [{ isPrimary: "desc" }, { isSecondary: "desc" }, { createdAt: "asc" }] } },
   });
   const opProfile =
     operatorUserId !== subjectUserId
-      ? await prisma.profile.findFirst({ where: { userId: operatorUserId }, orderBy: { isPrimary: "desc" }, include: { insurance: true } })
+      ? await prisma.profile.findFirst({ where: { userId: operatorUserId }, orderBy: { isPrimary: "desc" }, include: { insurance: { orderBy: [{ isPrimary: "desc" }, { isSecondary: "desc" }, { createdAt: "asc" }] } } })
       : null;
-  const plan = memberProfile?.insurance?.[0] ?? opProfile?.insurance?.[0];
+  // Prefer the explicitly-linked card; else the member's primary; else the operator's primary.
+  const allPlans = [...(memberProfile?.insurance ?? []), ...(opProfile?.insurance ?? [])];
+  const chosen = input.insurancePlanId ? allPlans.find((p) => p.id === input.insurancePlanId) : undefined;
+  const plan = chosen ?? memberProfile?.insurance?.[0] ?? opProfile?.insurance?.[0];
   const memberId = plan?.memberIdEnc ? decryptToken(plan.memberIdEnc) : "";
   return {
     name: (member?.displayName || memberProfile?.fullName || "the patient").trim(),
@@ -65,6 +68,10 @@ export interface BookingInput {
   phone?: string;
   website?: string;
   email?: string;
+  // Which saved insurance card (from the member's wallet, or the operator's) to use for THIS booking.
+  // Lets the operator book Dad's visit on his Medicare, not her family plan. Falls back to the
+  // member's primary card, then the operator's primary card.
+  insurancePlanId?: string;
 }
 
 export interface BookingOutcome {
@@ -80,6 +87,9 @@ export interface BookingOutcome {
   // false = a provisional hold Klove placed without a live call (no contact info / LIVE_BOOKING off).
   // The UI must not present a provisional hold as a verified, office-confirmed appointment.
   verified: boolean;
+  // Echoed so the confirm screen shows WHO this was booked for and WHICH coverage was attached.
+  patientName?: string;
+  insurance?: string;
 }
 
 function confirmationCode(): string {
@@ -105,7 +115,7 @@ export async function bookAppointment(
   if (config.liveBooking && (hasContact || canLookup)) {
     return liveBooking(operatorUserId, subjectUserId, householdId, input);
   }
-  return simulatedBooking(subjectUserId, householdId, input);
+  return simulatedBooking(operatorUserId, subjectUserId, householdId, input);
 }
 
 /** Create a real booking job and start the orchestrator. Returns immediately (async result). */
@@ -123,7 +133,7 @@ async function liveBooking(operatorUserId: string, subjectUserId: string, househ
   }
   // If there's still no way to reach anyone, confirm a placeholder instead of a dead-end job.
   if (!phone && !website && !email) {
-    return simulatedBooking(subjectUserId, householdId, input);
+    return simulatedBooking(operatorUserId, subjectUserId, householdId, input);
   }
 
   // Full patient details (name, DOB, insurance) so the AI can introduce the patient on the call.
@@ -162,13 +172,16 @@ async function liveBooking(operatorUserId: string, subjectUserId: string, househ
   });
 
   void placeNextCall(session.id); // fire-and-forget; reconcileConciergeJobs finalizes it
-  return { status: "in_progress", taskId: task.id, title: reason, provider, sessionId: session.id, verified: true };
+  return { status: "in_progress", taskId: task.id, title: reason, provider, sessionId: session.id, verified: true, patientName: patient.name, insurance: patient.insurance };
 }
 
 /** Deterministically confirm a booking and surface it across Klove's objects. */
-async function simulatedBooking(subjectUserId: string, householdId: string, input: BookingInput): Promise<BookingOutcome> {
+async function simulatedBooking(operatorUserId: string, subjectUserId: string, householdId: string, input: BookingInput): Promise<BookingOutcome> {
   const reason = input.reason.trim() || "Appointment";
   const provider = input.provider?.trim() || null;
+  // Resolve who this is for + which coverage, so the confirm screen and the saved record reflect the
+  // real patient and the linked card (not the operator's default).
+  const patient = await buildPatientInfo(subjectUserId, operatorUserId, input, reason);
   const startsAt = input.preferredDate ? new Date(input.preferredDate) : new Date(Date.now() + 7 * 86_400_000);
   if (Number.isNaN(startsAt.getTime())) startsAt.setTime(Date.now() + 7 * 86_400_000);
 
@@ -179,7 +192,7 @@ async function simulatedBooking(subjectUserId: string, householdId: string, inpu
       tier: "human",
       kind: "booking",
       status: "completed",
-      patientInfo: toJson({ reason, preferredTimes: input.preferredDate ?? "" }),
+      patientInfo: toJson(patient),
       targets: {
         create: {
           officeName: provider ?? reason,
@@ -261,6 +274,8 @@ async function simulatedBooking(subjectUserId: string, householdId: string, inpu
     startsAt: startsAt.toISOString(),
     sessionId: session.id,
     verified: false,
+    patientName: patient.name,
+    insurance: patient.insurance,
   };
 }
 

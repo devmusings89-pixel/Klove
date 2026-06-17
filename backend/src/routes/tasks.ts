@@ -5,7 +5,16 @@ import { ensureHousehold, accessibleSubjects } from "../services/household.js";
 import { placeBookingCallback } from "../services/orchestrator.js";
 import { fromJson } from "../services/json.js";
 
-const STATES = new Set(["needs_you", "waiting", "handled"]);
+const STATES = new Set(["needs_you", "waiting", "handled", "snoozed"]);
+
+/** Resurface snoozed tasks whose snooze window has elapsed (snoozed → needs_you). Runs on the tick. */
+export async function resurfaceSnoozedTasks(): Promise<number> {
+  const res = await prisma.task.updateMany({
+    where: { state: "snoozed", dueAt: { lte: new Date() } },
+    data: { state: "needs_you" },
+  });
+  return res.count;
+}
 
 /**
  * The Actions log + task state machine. Tasks belong to members; the operator sees tasks for every
@@ -53,6 +62,22 @@ export async function taskRoutes(app: FastifyInstance) {
       return updated;
     },
   );
+
+  // Snooze a task — hide it from Today for `days`, then resurface it (the spec's "do it now,
+  // snooze, or hand to concierge"). Reuses dueAt as the resurface time; the tick brings it back.
+  app.post<{ Params: { id: string }; Body: { days?: number } }>("/tasks/:id/snooze", { preHandler: requireUser }, async (req, reply) => {
+    const task = await prisma.task.findUnique({ where: { id: req.params.id } });
+    if (!task) return reply.code(404).send({ error: "not_found" });
+    try {
+      await resolveSubject(req, task.subjectUserId, { need: "manage" });
+    } catch (err) {
+      return reply.code(isConsentError(err) ? 403 : 500).send({ error: "forbidden" });
+    }
+    const days = Math.min(Math.max(Math.round(req.body?.days ?? 7), 1), 90);
+    const dueAt = new Date(Date.now() + days * 86_400_000);
+    const updated = await prisma.task.update({ where: { id: task.id }, data: { state: "snoozed", dueAt } });
+    return reply.send(updated);
+  });
 
   // Dismiss/delete a task (needs manage over the subject).
   app.delete<{ Params: { id: string } }>("/tasks/:id", { preHandler: requireUser }, async (req, reply) => {

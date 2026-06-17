@@ -23,6 +23,11 @@ struct HouseholdMember: Decodable, Identifiable, Hashable {
     var id: String { userId }
     var name: String { displayName ?? "Member" }
 
+    /// Name as shown in member lists/pickers. The operator (self) is tagged so they can tell at a
+    /// glance which entries they act on directly. Use `name` (not this) where the bare name reads
+    /// better — e.g. the possessive "booked in <name>'s name".
+    var displayLabel: String { isOperator ? "\(name) (primary operator)" : name }
+
     /// SF Symbol for the member's relationship/type.
     var symbol: String {
         switch memberType {
@@ -44,6 +49,10 @@ struct MemberDetail: Decodable {
     let isOperator: Bool
     let managed: Bool
     let consent: MemberConsent
+
+    var name: String { displayName ?? "Member" }
+    /// Name tagged with the operator role for headers/labels. See HouseholdMember.displayLabel.
+    var displayLabel: String { isOperator ? "\(name) (primary operator)" : name }
 }
 
 /// The operator's consent over a member: access level + which data categories are shared.

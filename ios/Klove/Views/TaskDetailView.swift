@@ -91,6 +91,17 @@ struct TaskDetailView: View {
                     .frame(maxWidth: .infinity).padding(.vertical, 12)
             }
             .foregroundStyle(.white).background(Theme.accent, in: RoundedRectangle(cornerRadius: 12)).disabled(working)
+
+            // The spec's third choice: do it now, hand to Klove, or snooze it out of the way.
+            Menu {
+                Button("3 days") { Task { await snooze(3) } }
+                Button("1 week") { Task { await snooze(7) } }
+                Button("2 weeks") { Task { await snooze(14) } }
+            } label: {
+                Label("Snooze", systemImage: "clock.arrow.circlepath")
+                    .frame(maxWidth: .infinity).padding(.vertical, 12)
+            }
+            .foregroundStyle(Theme.ink).background(Theme.surfaceSunken, in: RoundedRectangle(cornerRadius: 12)).disabled(working)
         }
     }
 
@@ -102,5 +113,10 @@ struct TaskDetailView: View {
     private func route() async {
         working = true; defer { working = false }
         if (try? await api.routeTaskToConcierge(task.id)) != nil { state = "waiting"; onChange(); dismiss() }
+    }
+
+    private func snooze(_ days: Int) async {
+        working = true; defer { working = false }
+        if (try? await api.snoozeTask(task.id, days: days)) != nil { onChange(); dismiss() }
     }
 }

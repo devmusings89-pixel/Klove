@@ -20,6 +20,12 @@ extension APIClient {
         try await post("/tasks/\(id)/route-to-concierge", body: [String: String]())
     }
 
+    /// Snooze a task — hides it from Today for `days`, then it resurfaces.
+    @discardableResult
+    func snoozeTask(_ id: String, days: Int) async throws -> KloveTask {
+        try await post("/tasks/\(id)/snooze", body: ["days": days])
+    }
+
     /// Pick one of the alternate times the office offered for a choose_time task.
     @discardableResult
     func chooseTaskSlot(_ id: String, slot: String) async throws -> EmptyResponse {

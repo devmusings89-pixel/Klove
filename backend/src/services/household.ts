@@ -44,11 +44,15 @@ export async function listMembers(operatorUserId: string): Promise<MemberView[]>
   const householdId = await ensureHousehold(operatorUserId);
   // Fetch the roster, every grant, and per-member task counts in 3 queries (not N+1 per member) —
   // remote-Postgres round-trips dominate latency, so query count matters more than row count.
-  const [memberships, grants, taskGroups] = await Promise.all([
+  const [memberships, grants, taskGroups, selfProfile] = await Promise.all([
     prisma.householdMembership.findMany({ where: { householdId }, include: { user: true }, orderBy: { createdAt: "asc" } }),
     prisma.consentGrant.findMany({ where: { granteeUserId: operatorUserId }, orderBy: { createdAt: "desc" } }),
     prisma.task.groupBy({ by: ["subjectUserId"], where: { householdId, state: "needs_you" }, _count: { _all: true } }),
+    // The operator's own name comes from their profile when they never set a User.displayName — so
+    // the self row reads as their name, not the bare placeholder "Me".
+    prisma.profile.findFirst({ where: { userId: operatorUserId }, orderBy: { isPrimary: "desc" }, select: { fullName: true } }),
   ]);
+  const selfName = selfProfile?.fullName?.trim() || null;
 
   // Map subject → latest grant status (grants are newest-first, so the first wins).
   const consentBySubject = new Map<string, string>();
@@ -60,7 +64,7 @@ export async function listMembers(operatorUserId: string): Promise<MemberView[]>
     const self = m.userId === operatorUserId;
     return {
       userId: m.userId,
-      displayName: m.user.displayName ?? (self ? "Me" : null),
+      displayName: m.user.displayName ?? (self ? selfName ?? "Me" : null),
       relationship: m.relationship,
       memberType: m.memberType,
       isOperator: m.isOperator,

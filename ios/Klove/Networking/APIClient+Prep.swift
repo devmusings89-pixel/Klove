@@ -17,9 +17,16 @@ extension APIClient {
         try await post("/members/\(memberId)/authorize-booking", body: [String: String]())
     }
 
+    /// Resolve an office by name so the booking form can confirm "found it" before booking.
+    func lookupOffice(_ query: String) async throws -> OfficeMatch? {
+        let q = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+        let r: OfficeLookupResponse = try await get("/lookup/office?q=\(q)")
+        return r.match
+    }
+
     @discardableResult
-    func bookForMember(_ memberId: String, reason: String, provider: String?, preferredDate: String? = nil, preferredTimes: String? = nil, phone: String? = nil, website: String? = nil) async throws -> BookingOutcome {
-        try await post("/members/\(memberId)/book", body: BookBody(reason: reason, provider: provider, preferredDate: preferredDate, preferredTimes: preferredTimes, phone: phone, website: website))
+    func bookForMember(_ memberId: String, reason: String, provider: String?, preferredDate: String? = nil, preferredTimes: String? = nil, phone: String? = nil, website: String? = nil, insurancePlanId: String? = nil) async throws -> BookingOutcome {
+        try await post("/members/\(memberId)/book", body: BookBody(reason: reason, provider: provider, preferredDate: preferredDate, preferredTimes: preferredTimes, phone: phone, website: website, insurancePlanId: insurancePlanId))
     }
 
     @discardableResult
@@ -50,6 +57,9 @@ struct BookingOutcome: Decodable {
     let startsAt: String?
     let sessionId: String?
     let verified: Bool?
+    /// Echoed by the backend: who this was booked for and which coverage was attached.
+    let patientName: String?
+    let insurance: String?
 
     var isConfirmed: Bool { status == "confirmed" }
     /// A confirmed booking that Klove placed WITHOUT a live call — a hold, not an office confirmation.
@@ -78,6 +88,15 @@ enum ISO8601 {
     }
 }
 
+/// An office resolved from a name via Google Places (GET /lookup/office).
+struct OfficeMatch: Decodable, Hashable {
+    let displayName: String
+    let phone: String?
+    let website: String?
+    let address: String?
+}
+private struct OfficeLookupResponse: Decodable { let match: OfficeMatch? }
+
 private struct BookBody: Encodable {
     let reason: String
     let provider: String?
@@ -85,5 +104,6 @@ private struct BookBody: Encodable {
     let preferredTimes: String?
     let phone: String?
     let website: String?
+    let insurancePlanId: String?
 }
 private struct VisitSummaryBody: Encodable { let summary: String; let followUps: [String] }

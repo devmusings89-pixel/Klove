@@ -4,6 +4,7 @@ import { requireUser, resolveSubject, isConsentError, type AccessLevel } from ".
 import { ensureHousehold } from "../services/household.js";
 import { buildBrief, saveQuestions } from "../services/prep.js";
 import { bookAppointment } from "../services/concierge.js";
+import { resolveOffice } from "../services/lookup.js";
 import { cancelAppointmentReminders } from "../services/reminders.js";
 import { audit } from "../services/audit.js";
 
@@ -64,10 +65,22 @@ export async function prepRoutes(app: FastifyInstance) {
     return reply.send({ ok: true, authorizedAt: new Date().toISOString() });
   });
 
+  // Resolve an office by name so the booking form can confirm "found it" before the user books.
+  // Returns { match: OfficeMatch | null }; the client debounces calls as the user types.
+  app.get<{ Querystring: { q?: string } }>(
+    "/lookup/office",
+    { preHandler: requireUser },
+    async (req, reply) => {
+      const q = (req.query?.q ?? "").trim();
+      if (q.length < 3) return reply.send({ match: null });
+      return reply.send({ match: await resolveOffice(q) });
+    },
+  );
+
   // Book on the member's behalf (concierge). Live (Vapi/web/email) when LIVE_BOOKING is on and we can
   // reach the office; otherwise a provisional hold (verified:false) the office must still confirm.
   // The outcome distinguishes the two so the client never presents a hold as a confirmed booking.
-  app.post<{ Params: { id: string }; Body: { reason?: string; provider?: string; preferredDate?: string; preferredTimes?: string; phone?: string; website?: string } }>(
+  app.post<{ Params: { id: string }; Body: { reason?: string; provider?: string; preferredDate?: string; preferredTimes?: string; phone?: string; website?: string; insurancePlanId?: string } }>(
     "/members/:id/book",
     { preHandler: requireUser },
     async (req, reply) => {
@@ -82,6 +95,7 @@ export async function prepRoutes(app: FastifyInstance) {
         preferredTimes: req.body?.preferredTimes,
         phone: req.body?.phone,
         website: req.body?.website,
+        insurancePlanId: req.body?.insurancePlanId,
       });
       // Don't write the free-text visit reason (PHI) into the audit trail — the audit helper is
       // explicitly "who did what, to whom, no PHI bodies". Record only that a booking was requested.

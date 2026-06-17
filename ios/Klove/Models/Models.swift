@@ -58,6 +58,26 @@ struct InsuranceInfo: Codable, Hashable {
     }
 }
 
+/// A saved insurance card in a member's wallet (collection). `id` lets a booking link a specific card.
+struct InsuranceCard: Codable, Hashable, Identifiable {
+    var id: String
+    var carrier: String?
+    var planName: String?
+    var memberId: String?
+    var groupId: String?
+    var rxBin: String?
+    var rxPcn: String?
+    var holderName: String?
+    var isPrimary: Bool = false
+    var isSecondary: Bool = false
+
+    /// One-line label for pickers/rows, e.g. "Medicare · Part B".
+    var label: String {
+        let head = carrier ?? "Insurance"
+        return [head, planName].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+}
+
 struct UserProfile: Codable, Hashable {
     var id: String?
     var fullName: String = ""
@@ -66,10 +86,17 @@ struct UserProfile: Codable, Hashable {
     var email: String?
     var address: String?
     var insurance: InsuranceInfo?
+    /// The full insurance wallet (collection). `insurance` above is just the primary card.
+    var insurancePlans: [InsuranceCard]?
 }
 
 struct ProfileResponse: Codable {
     let profile: UserProfile?
+}
+
+/// Response from the insurance-wallet endpoints (`/profile/insurance`, `/members/:id/insurance`).
+struct InsuranceWalletResponse: Codable {
+    let plans: [InsuranceCard]
 }
 
 // MARK: - Natural-language intake (POST /intake/parse)

@@ -318,6 +318,7 @@ model InsurancePlan {
   rxPcn       String?
   holderName  String? // subscriber/policyholder if different from the patient
   isPrimary   Boolean  @default(true)
+  isSecondary Boolean  @default(false) // the "backup" payer, billed after the primary
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

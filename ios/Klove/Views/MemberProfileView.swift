@@ -116,7 +116,7 @@ struct MemberProfileView: View {
                 .frame(width: 64, height: 64)
                 .background(Theme.accentSoft, in: Circle())
             VStack(alignment: .leading, spacing: 4) {
-                Text(d.displayName ?? "Member").font(.title2.weight(.semibold)).foregroundStyle(Theme.ink)
+                Text(d.displayLabel).font(.title2.weight(.semibold)).foregroundStyle(Theme.ink)
                 Text(typeLabel(d)).font(.subheadline).foregroundStyle(Theme.inkSecondary)
             }
             Spacer()
@@ -153,6 +153,12 @@ struct MemberProfileView: View {
                 careRow(icon: "calendar.badge.plus", title: "Book a visit", subtitle: "Klove schedules it for you")
             }
             .buttonStyle(.plain)
+            Divider().padding(.leading, 52)
+            NavigationLink {
+                InsuranceWalletView(memberId: memberId, memberName: d.displayName ?? "this member")
+            } label: {
+                careRow(icon: "creditcard.fill", title: "Insurance & info", subtitle: "Cards used when booking")
+            }
             Divider().padding(.leading, 52)
             NavigationLink {
                 MemberConnectView(memberId: memberId, memberName: d.displayName ?? "this member")

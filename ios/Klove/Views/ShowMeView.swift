@@ -34,6 +34,14 @@ struct ShowMeView: View {
                 if loading {
                     ProgressView().frame(maxWidth: .infinity).padding(.top, 30)
                 } else if let r = result {
+                    if let summary = r.summary, !summary.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Label("Klove", systemImage: "sparkles").font(.caption.weight(.semibold)).foregroundStyle(Theme.accent)
+                            Text(summary).font(.subheadline).foregroundStyle(Theme.ink)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .kloveCard()
+                    }
                     if let s = r.series { trendChart(s) }
                     if r.entries.isEmpty && r.series == nil {
                         Text("Nothing on file for \"\(r.title)\" yet.").font(.subheadline).foregroundStyle(Theme.inkSecondary).kloveCard()

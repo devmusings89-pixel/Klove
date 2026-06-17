@@ -1,9 +1,19 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
+import Fastify from "fastify";
 import { prisma } from "../src/db.js";
 import { ensureHousehold } from "../src/services/household.js";
 import { runMedicationDoseTick, runMissedDoseTick, runRefillTick } from "../src/services/medications.js";
+import { medicationRoutes } from "../src/routes/medications.js";
 import { toJson } from "../src/services/json.js";
+
+/** A Fastify app with just the medication routes, identity resolved via the dev x-user-email header. */
+async function buildApp() {
+  const app = Fastify();
+  await app.register(medicationRoutes);
+  await app.ready();
+  return app;
+}
 
 const SUFFIX = `meds-${process.pid}-${process.hrtime.bigint()}`;
 const userIds: string[] = [];
@@ -150,4 +160,60 @@ test("refill tick nudges the caregiver once for a medication due soon", async ()
   const msgs = await prisma.message.findMany({ where: { householdId, title: "Refill due soon" } });
   assert.equal(msgs.length, 1);
   assert.match(msgs[0].body, /Atorvastatin/);
+});
+
+test("POST /members/:id/medications adds a manual med with computed refill date", async () => {
+  const app = await buildApp();
+  // Self-access: an operator adding to their own record needs no consent grant.
+  const me = await prisma.user.create({ data: { email: `manual.${SUFFIX}@klove.test`, displayName: "Self" } });
+  userIds.push(me.id);
+
+  const res = await app.inject({
+    method: "POST",
+    url: `/members/${me.id}/medications`,
+    headers: { "x-user-email": me.email! },
+    payload: { display: "Metformin 500mg", dosage: "500mg twice daily", daysSupply: 30, startDate: "2026-06-01" },
+  });
+  assert.equal(res.statusCode, 201);
+  const { id } = res.json() as { id: string };
+
+  const med = await prisma.medicationStatement.findUnique({ where: { id } });
+  assert.equal(med?.sourceType, "manual");
+  assert.equal(med?.confidence, 1.0);
+  assert.equal(med?.documentId, null);
+  // nextRefillDue = startDate + daysSupply days.
+  assert.equal(med?.nextRefillDue?.toISOString().slice(0, 10), "2026-07-01");
+
+  // Missing display is a 400.
+  const bad = await app.inject({
+    method: "POST",
+    url: `/members/${me.id}/medications`,
+    headers: { "x-user-email": me.email! },
+    payload: { dosage: "10mg" },
+  });
+  assert.equal(bad.statusCode, 400);
+  await app.close();
+});
+
+test("PATCH /medications/:id edits fields and recomputes the refill date", async () => {
+  const app = await buildApp();
+  const me = await prisma.user.create({ data: { email: `patch.${SUFFIX}@klove.test`, displayName: "Self" } });
+  userIds.push(me.id);
+  // Editing works on extracted meds too — seed one with a non-manual sourceType.
+  const med = await mkMedication(me.id, "Lisinopril 10mg", { daysSupply: 30, startDate: new Date("2026-06-01") });
+
+  const res = await app.inject({
+    method: "PATCH",
+    url: `/medications/${med.id}`,
+    headers: { "x-user-email": me.email! },
+    payload: { dosage: "20mg once daily", daysSupply: 90 },
+  });
+  assert.equal(res.statusCode, 200);
+
+  const updated = await prisma.medicationStatement.findUnique({ where: { id: med.id } });
+  assert.equal(updated?.dosage, "20mg once daily");
+  assert.equal(updated?.daysSupply, 90);
+  // Refill date recomputed off the unchanged start date + new days supply.
+  assert.equal(updated?.nextRefillDue?.toISOString().slice(0, 10), "2026-08-30");
+  await app.close();
 });

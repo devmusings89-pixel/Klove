@@ -19,6 +19,39 @@ struct MemberMedication: Decodable, Identifiable, Hashable {
     }
 }
 
+/// Fields sent when manually adding or editing a medication (POST/PATCH). Omitted fields are
+/// left unset on create; on edit, nil means "leave unchanged" for the non-encoded keys.
+struct MedicationBody: Encodable {
+    var display: String? = nil
+    var dosage: String? = nil
+    var frequency: String? = nil
+    var daysSupply: Int? = nil
+    var refillsRemaining: Int? = nil
+    var status: String? = nil
+    var rxNormCode: String? = nil
+}
+
+/// POST/PATCH /medications response — just enough to chain a schedule POST.
+struct CreatedMedication: Decodable, Hashable {
+    let id: String
+}
+
+/// A drug-name autocomplete suggestion (GET /medications/search). `name` is the clean display
+/// name; `term` is the canonical RxNorm name used to resolve an rxNormCode on selection.
+struct DrugSuggestion: Decodable, Hashable, Identifiable {
+    let name: String
+    let term: String
+    var id: String { term }
+}
+
+struct DrugSearchResponse: Decodable {
+    let results: [DrugSuggestion]
+}
+
+struct RxcuiResponse: Decodable {
+    let rxcui: String?
+}
+
 struct MedSchedule: Decodable, Hashable {
     let id: String
     let times: [String]   // "HH:MM" 24h

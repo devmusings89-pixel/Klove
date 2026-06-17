@@ -13,7 +13,7 @@ import { householdRoutes } from "./routes/household.js";
 import { memberRoutes } from "./routes/members.js";
 import { consentRoutes } from "./routes/consent.js";
 import { memberDataRoutes } from "./routes/member-data.js";
-import { taskRoutes } from "./routes/tasks.js";
+import { taskRoutes, resurfaceSnoozedTasks } from "./routes/tasks.js";
 import { todayRoutes } from "./routes/today.js";
 import { reminderRoutes } from "./routes/reminders.js";
 import { medicationRoutes } from "./routes/medications.js";
@@ -247,6 +247,7 @@ app
     setInterval(() => {
       runSchedulerTick().catch((err) => app.log.error({ err }, "scheduler tick failed"));
       runReminderTick().catch((err) => app.log.error({ err }, "reminder tick failed"));
+      resurfaceSnoozedTasks().catch((err) => app.log.error({ err }, "snooze resurface failed"));
       autoGenerateReminders().catch((err) => app.log.error({ err }, "auto-reminder gen failed"));
       reconcileConciergeJobs().catch((err) => app.log.error({ err }, "concierge reconcile failed"));
       runMedicationDoseTick().catch((err) => app.log.error({ err }, "med dose tick failed"));

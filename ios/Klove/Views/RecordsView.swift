@@ -58,7 +58,7 @@ struct RecordsView: View {
                 ForEach(members) { m in
                     let active = m.userId == selected?.userId
                     Button { selectedId = m.userId } label: {
-                        Text(m.name)
+                        Text(m.displayLabel)
                             .font(.subheadline.weight(.medium))
                             .foregroundStyle(active ? .white : Theme.ink)
                             .padding(.horizontal, 14).padding(.vertical, 8)

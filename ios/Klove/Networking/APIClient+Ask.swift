@@ -12,6 +12,8 @@ struct ShowMeResult: Decodable {
     let count: Int
     let entries: [TimelineEntry]
     let series: ShowMeSeries?
+    /// Plain-language, grounded answer ("what changed and why it matters"). Nil when no LLM/records.
+    let summary: String?
 }
 
 /// A numeric trend for charting (e.g. blood pressure over time).

@@ -15,6 +15,7 @@ struct KloveBooking: Identifiable, Hashable {
     let reason: String
     let office: String
     let whenText: String?
+    let verified: Bool   // true = office-confirmed (target "booked"); false = provisional hold
 }
 
 @MainActor
@@ -78,7 +79,8 @@ final class AppointmentsModel {
                     id: t.id,
                     reason: s.patientInfo?.reason ?? "Appointment",
                     office: t.officeName,
-                    whenText: (when?.isEmpty == false) ? when : nil
+                    whenText: (when?.isEmpty == false) ? when : nil,
+                    verified: t.status == "booked"
                 )
             }
         }

@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { prisma } from "../db.js";
 import { requireUser, resolveSubject, isConsentError, type AccessLevel } from "../services/auth.js";
 import { toJson, fromJson } from "../services/json.js";
+import { searchDrugNames, resolveRxcui } from "../services/rxnav.js";
 
 /** Medication schedules, dose logging, and adherence. Drives the worker ticks in services/medications. */
 export async function medicationRoutes(app: FastifyInstance) {
@@ -61,6 +62,125 @@ export async function medicationRoutes(app: FastifyInstance) {
         };
       }),
     };
+  });
+
+  // Fields a client may set when creating or editing a medication (mirrors the columns the
+  // extraction pipeline fills in fhir-map). `display` is the only required one.
+  type MedInput = {
+    display?: string;
+    dosage?: string;
+    doseValue?: number;
+    doseUnit?: string;
+    frequency?: string;
+    route?: string;
+    daysSupply?: number;
+    refillsRemaining?: number;
+    status?: string;
+    startDate?: string;
+    endDate?: string;
+    rxNormCode?: string;
+  };
+
+  // Parse an ISO date string, returning undefined for empty/invalid input.
+  const parseDate = (s?: string): Date | undefined => {
+    if (!s) return undefined;
+    const d = new Date(s);
+    return Number.isNaN(d.getTime()) ? undefined : d;
+  };
+
+  // Refill date derived from start + days supply, the same way the extraction path does it.
+  const refillDue = (startDate?: Date, daysSupply?: number): Date | undefined =>
+    startDate && daysSupply ? new Date(startDate.getTime() + daysSupply * 86_400_000) : undefined;
+
+  // Manually add a medication for a member (no document needed). Slots into the same
+  // MedicationStatement model as extracted meds, so schedules/doses/refills/adherence all apply.
+  app.post<{ Params: { id: string }; Body: MedInput }>(
+    "/members/:id/medications",
+    { preHandler: requireUser },
+    async (req, reply) => {
+      const userId = await subjectOr403(req, reply, req.params.id, "manage");
+      if (!userId) return;
+      const body = req.body ?? {};
+      const display = body.display?.trim();
+      if (!display) return reply.code(400).send({ error: "display required" });
+
+      const startDate = parseDate(body.startDate);
+      const med = await prisma.medicationStatement.create({
+        data: {
+          userId,
+          sourceType: "manual",
+          confidence: 1.0, // operator-asserted, not extracted
+          display,
+          rxNormCode: body.rxNormCode,
+          dosage: body.dosage,
+          doseValue: body.doseValue,
+          doseUnit: body.doseUnit,
+          frequency: body.frequency,
+          route: body.route,
+          daysSupply: body.daysSupply,
+          refillsRemaining: body.refillsRemaining,
+          nextRefillDue: refillDue(startDate, body.daysSupply),
+          status: body.status ?? "active",
+          startDate,
+          endDate: parseDate(body.endDate),
+          rawJson: toJson(body),
+        },
+      });
+      return reply.code(201).send({ id: med.id, display: med.display, dosage: med.dosage, status: med.status });
+    },
+  );
+
+  // Edit a medication. Works on ANY medication regardless of sourceType, so a caregiver can
+  // correct a mis-extracted entry, not just manually-added ones.
+  app.patch<{ Params: { id: string }; Body: MedInput }>(
+    "/medications/:id",
+    { preHandler: requireUser },
+    async (req, reply) => {
+      const med = await prisma.medicationStatement.findUnique({ where: { id: req.params.id } });
+      if (!med) return reply.code(404).send({ error: "not_found" });
+      const userId = await subjectOr403(req, reply, med.userId, "manage");
+      if (!userId) return;
+      const body = req.body ?? {};
+      const display = body.display !== undefined ? body.display.trim() : undefined;
+      if (display !== undefined && !display) return reply.code(400).send({ error: "display cannot be empty" });
+
+      // Recompute the refill date from the effective start date + days supply after the edit.
+      const startDate = body.startDate !== undefined ? parseDate(body.startDate) : med.startDate ?? undefined;
+      const daysSupply = body.daysSupply !== undefined ? body.daysSupply : med.daysSupply ?? undefined;
+
+      const updated = await prisma.medicationStatement.update({
+        where: { id: med.id },
+        data: {
+          display,
+          rxNormCode: body.rxNormCode,
+          dosage: body.dosage,
+          doseValue: body.doseValue,
+          doseUnit: body.doseUnit,
+          frequency: body.frequency,
+          route: body.route,
+          daysSupply: body.daysSupply,
+          refillsRemaining: body.refillsRemaining,
+          status: body.status,
+          startDate: body.startDate !== undefined ? startDate : undefined,
+          endDate: body.endDate !== undefined ? parseDate(body.endDate) : undefined,
+          nextRefillDue: refillDue(startDate, daysSupply),
+        },
+      });
+      return reply.send({ id: updated.id, display: updated.display, dosage: updated.dosage, status: updated.status });
+    },
+  );
+
+  // Drug-name autocomplete, matched against RxNav's curated display-name list (cached in memory,
+  // see services/rxnav). Returns clean consumer-friendly names plus the canonical RxNorm `term`
+  // used to resolve an rxNormCode on selection.
+  app.get<{ Querystring: { q?: string } }>("/medications/search", { preHandler: requireUser }, async (req, reply) => {
+    return reply.send({ results: await searchDrugNames(req.query?.q ?? "") });
+  });
+
+  // Resolve a picked suggestion's display name to its RxNorm code. Called once on selection so the
+  // per-keystroke search stays a fast local match with no external round-trips.
+  app.get<{ Querystring: { name?: string } }>("/medications/rxcui", { preHandler: requireUser }, async (req, reply) => {
+    return reply.send({ rxcui: await resolveRxcui(req.query?.name ?? "") });
   });
 
   // Create or replace the dosing schedule for a medication (times = ["08:00","18:00"]).

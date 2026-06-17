@@ -12,6 +12,7 @@ import { runExtractionTick } from "../services/health-worker.js";
 import { buildTimeline, buildSummary } from "../services/graph.js";
 import { ALLOWED_UPLOAD_MIMES, MAX_UPLOAD_BYTES } from "./uploads.js";
 import type { SourceType } from "../sources/types.js";
+import { serializeProfile, upsertProfile, addInsurance, updateInsurance, deleteInsurance, listInsurance } from "../services/profiles.js";
 
 // A representative health email for the mock scan (live mode pulls real mail via Gmail). Kept to a
 // single message so the deterministic mock extractor doesn't create duplicate records.
@@ -257,5 +258,56 @@ export async function memberDataRoutes(app: FastifyInstance) {
       connectionId,
     );
     return reply.code(201).send({ documentId: result.documentId, status: result.status });
+  });
+
+  // ---- Per-member profile + insurance wallet ----
+  // The operator manages each member's demographics and their own collection of insurance cards
+  // (e.g. a child on the family plan, an aging parent on Medicare + a supplement). Booking links a
+  // specific card per person, so the office gets the right coverage — not the operator's default.
+
+  app.get<{ Params: { id: string } }>("/members/:id/profile", { preHandler: requireUser }, async (req, reply) => {
+    const userId = await subjectOr403(req, reply, req.params.id, "view", "records");
+    if (!userId) return;
+    return { profile: await serializeProfile(userId) };
+  });
+
+  app.put<{ Params: { id: string }; Body: Record<string, string> }>("/members/:id/profile", { preHandler: requireUser }, async (req, reply) => {
+    const userId = await subjectOr403(req, reply, req.params.id, "manage", "records");
+    if (!userId) return;
+    await upsertProfile(userId, req.body ?? {});
+    return { profile: await serializeProfile(userId) };
+  });
+
+  app.get<{ Params: { id: string } }>("/members/:id/insurance", { preHandler: requireUser }, async (req, reply) => {
+    const userId = await subjectOr403(req, reply, req.params.id, "view", "records");
+    if (!userId) return;
+    return { plans: await listInsurance(userId) };
+  });
+
+  app.post<{ Params: { id: string }; Body: Record<string, unknown> }>("/members/:id/insurance", { preHandler: requireUser }, async (req, reply) => {
+    const userId = await subjectOr403(req, reply, req.params.id, "manage", "records");
+    if (!userId) return;
+    const plans = await addInsurance(userId, req.body ?? {});
+    return reply.code(201).send({ plans });
+  });
+
+  app.patch<{ Params: { id: string; planId: string }; Body: Record<string, unknown> }>(
+    "/members/:id/insurance/:planId",
+    { preHandler: requireUser },
+    async (req, reply) => {
+      const userId = await subjectOr403(req, reply, req.params.id, "manage", "records");
+      if (!userId) return;
+      const plans = await updateInsurance(userId, req.params.planId, req.body ?? {});
+      if (!plans) return reply.code(404).send({ error: "not_found" });
+      return { plans };
+    },
+  );
+
+  app.delete<{ Params: { id: string; planId: string } }>("/members/:id/insurance/:planId", { preHandler: requireUser }, async (req, reply) => {
+    const userId = await subjectOr403(req, reply, req.params.id, "manage", "records");
+    if (!userId) return;
+    const plans = await deleteInsurance(userId, req.params.planId);
+    if (!plans) return reply.code(404).send({ error: "not_found" });
+    return { plans };
   });
 }
