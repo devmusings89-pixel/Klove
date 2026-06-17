@@ -32,7 +32,9 @@ struct TaskDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .kloveCard()
 
-                if let jobId = task.conciergeJobId { SessionLiveCard(sessionId: jobId) }
+                // Show the live call card except on a choose-time task, where the time picker below
+                // is the relevant surface and the card would just duplicate it.
+                if let jobId = task.conciergeJobId, !task.isChooseTime { SessionLiveCard(sessionId: jobId) }
 
                 if task.isChooseTime, let slots = task.options, !slots.isEmpty, state == "needs_you" {
                     chooseTimes(slots)

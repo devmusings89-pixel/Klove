@@ -148,7 +148,7 @@ struct CallTarget: Codable, Hashable, Identifiable {
     let id: String
     let officeName: String
     let phoneNumber: String?
-    let timezone: String
+    let timezone: String?   // null for concierge bookings that didn't capture an office timezone
     let order: Int
     let status: String          // pending | calling | awaiting_choice | awaiting_info | awaiting_verification | booked | transferred | requested | voicemail | failed | no_answer
     let channel: String?        // channel that handled this office: voice | web | ...
