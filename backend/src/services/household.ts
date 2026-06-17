@@ -42,38 +42,33 @@ export interface MemberView {
 /** All members of the operator's household, shaped for the Family tab. */
 export async function listMembers(operatorUserId: string): Promise<MemberView[]> {
   const householdId = await ensureHousehold(operatorUserId);
-  const memberships = await prisma.householdMembership.findMany({
-    where: { householdId },
-    include: { user: true },
-    orderBy: { createdAt: "asc" },
-  });
+  // Fetch the roster, every grant, and per-member task counts in 3 queries (not N+1 per member) —
+  // remote-Postgres round-trips dominate latency, so query count matters more than row count.
+  const [memberships, grants, taskGroups] = await Promise.all([
+    prisma.householdMembership.findMany({ where: { householdId }, include: { user: true }, orderBy: { createdAt: "asc" } }),
+    prisma.consentGrant.findMany({ where: { granteeUserId: operatorUserId }, orderBy: { createdAt: "desc" } }),
+    prisma.task.groupBy({ by: ["subjectUserId"], where: { householdId, state: "needs_you" }, _count: { _all: true } }),
+  ]);
 
-  const out: MemberView[] = [];
-  for (const m of memberships) {
+  // Map subject → latest grant status (grants are newest-first, so the first wins).
+  const consentBySubject = new Map<string, string>();
+  for (const g of grants) if (!consentBySubject.has(g.subjectUserId)) consentBySubject.set(g.subjectUserId, g.status);
+  const needsYouBySubject = new Map<string, number>();
+  for (const t of taskGroups) needsYouBySubject.set(t.subjectUserId, t._count._all);
+
+  return memberships.map((m) => {
     const self = m.userId === operatorUserId;
-    let consent = "self";
-    if (!self) {
-      const grant = await prisma.consentGrant.findFirst({
-        where: { granteeUserId: operatorUserId, subjectUserId: m.userId },
-        orderBy: { createdAt: "desc" },
-      });
-      consent = grant?.status ?? "none";
-    }
-    const needsYou = await prisma.task.count({
-      where: { householdId, subjectUserId: m.userId, state: "needs_you" },
-    });
-    out.push({
+    return {
       userId: m.userId,
       displayName: m.user.displayName ?? (self ? "Me" : null),
       relationship: m.relationship,
       memberType: m.memberType,
       isOperator: m.isOperator,
       managed: m.user.managed,
-      consent,
-      needsYou,
-    });
-  }
-  return out;
+      consent: self ? "self" : consentBySubject.get(m.userId) ?? "none",
+      needsYou: needsYouBySubject.get(m.userId) ?? 0,
+    };
+  });
 }
 
 /** Parse a stored consent categories JSON array (defensive). */

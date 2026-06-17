@@ -9,8 +9,8 @@ enum Config {
     /// When empty, the app falls back to the backend's mock-payment endpoint.
     static let stripePublishableKey = ""
 
-    /// Supabase project URL + anon (publishable) key for Sign in with Apple → session exchange.
+    /// Supabase project URL + anon (publishable) key for Sign in with Apple/Google → session exchange.
     /// When empty, sign-in still works as a stable Apple-derived identity (dev header), no JWT.
-    static let supabaseURL = ""
-    static let supabaseAnonKey = ""
+    static let supabaseURL = "https://xgydnhqpsebszhpsbgaq.supabase.co"
+    static let supabaseAnonKey = "sb_publishable_DNABaw-IpsT8PMGFxTgLpA_Bu1QllqC"
 }
