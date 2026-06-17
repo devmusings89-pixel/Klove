@@ -72,10 +72,50 @@ const EXTRACT_TOOL: Anthropic.Tool = {
           type: "object",
           properties: {
             display: { type: "string" },
-            dosage: { type: "string" },
+            rxNormCode: { type: "string", description: "RxNorm code if known" },
+            dosage: { type: "string", description: "free text as written, e.g. '500mg twice daily'" },
+            doseValue: { type: "number", description: "numeric dose amount, e.g. 500" },
+            doseUnit: { type: "string", description: "dose unit, e.g. mg, mcg, mL" },
+            frequency: { type: "string", description: "e.g. 'once daily', 'twice daily', 'every 8 hours'" },
+            route: { type: "string", description: "oral | IV | topical | ..." },
+            daysSupply: { type: "number" },
             status: { type: "string" },
             startDate: { type: "string" },
             endDate: { type: "string" },
+            confidence: { type: "number" },
+          },
+          required: ["display"],
+        },
+      },
+      vitals: {
+        type: "array",
+        description: "Vital signs. Split blood pressure into systolic/diastolic with type 'blood_pressure'.",
+        items: {
+          type: "object",
+          properties: {
+            type: { type: "string", description: "blood_pressure | heart_rate | weight | height | bmi | temperature | spo2" },
+            systolic: { type: "number" },
+            diastolic: { type: "number" },
+            pulse: { type: "number" },
+            valueNum: { type: "number", description: "value for single-number vitals (weight/height/bmi/temp/spo2)" },
+            unit: { type: "string" },
+            measuredAt: { type: "string", description: "ISO date" },
+            confidence: { type: "number" },
+          },
+          required: ["type"],
+        },
+      },
+      immunizations: {
+        type: "array",
+        description: "Vaccines administered.",
+        items: {
+          type: "object",
+          properties: {
+            cvxCode: { type: "string", description: "CDC CVX code if known" },
+            display: { type: "string", description: "e.g. 'Influenza, seasonal', 'COVID-19 mRNA'" },
+            administeredAt: { type: "string", description: "ISO date" },
+            doseNumber: { type: "number" },
+            series: { type: "string" },
             confidence: { type: "number" },
           },
           required: ["display"],
@@ -137,7 +177,7 @@ export async function extractDocument(doc: HealthDocument): Promise<ExtractedBun
     system: SYSTEM,
     content,
     tool: { name: EXTRACT_TOOL.name, description: EXTRACT_TOOL.description ?? "", input_schema: EXTRACT_TOOL.input_schema as Record<string, unknown> },
-    maxTokens: 4000,
+    maxTokens: 16000, // multi-page lab reports yield large structured output; avoid truncating the tool JSON
   });
   return result ?? { isHealthRelated: false };
 }

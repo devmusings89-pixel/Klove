@@ -20,35 +20,38 @@ datasource db {
 }
 
 model User {
-  id              String                 @id @default(cuid())
+  id                String                 @id @default(cuid())
   // Optional: managed members (minors / aging parents) have no email until promoted to a login.
-  email           String?                @unique
+  email             String?                @unique
   // Supabase Auth UID. Links a Klove user to an authenticated identity; null for managed members.
-  authUserId      String?                @unique
+  authUserId        String?                @unique
   // Display name for the person within the household (e.g. "Dad", "Ava"); operator-set for managed.
-  displayName     String?
-  dob             DateTime?
+  displayName       String?
+  dob               DateTime?
+  sex               String? // "M" | "F" — for age/sex-aware reference ranges + screening guidelines
   // A managed member cannot log in; the operator owns their records on their behalf.
-  managed         Boolean                @default(false)
-  managedByUserId String?
-  managedBy       User?                  @relation("ManagedUsers", fields: [managedByUserId], references: [id])
-  managedUsers    User[]                 @relation("ManagedUsers")
-  deviceId        String?
-  apnsToken       String? // device token for APNs push (Phase 2)
-  pushEnabled     Boolean                @default(true) // notification preference
-  reminderLeadHours Int                  @default(24) // how far before an appointment to remind
-  createdAt       DateTime               @default(now())
-  sessions        Session[]
-  connections     DataSourceConnection[]
-  documents       HealthDocument[]
-  observations    Observation[]
-  conditions      Condition[]
-  medications     MedicationStatement[]
-  reports         DiagnosticReport[]
-  allergies       AllergyIntolerance[]
-  alerts          HealthAlert[]
-  appointments    Appointment[]
-  profiles        Profile[]
+  managed           Boolean                @default(false)
+  managedByUserId   String?
+  managedBy         User?                  @relation("ManagedUsers", fields: [managedByUserId], references: [id])
+  managedUsers      User[]                 @relation("ManagedUsers")
+  deviceId          String?
+  apnsToken         String? // device token for APNs push (Phase 2)
+  pushEnabled       Boolean                @default(true) // notification preference
+  reminderLeadHours Int                    @default(24) // how far before an appointment to remind
+  createdAt         DateTime               @default(now())
+  sessions          Session[]
+  connections       DataSourceConnection[]
+  documents         HealthDocument[]
+  observations      Observation[]
+  conditions        Condition[]
+  medications       MedicationStatement[]
+  reports           DiagnosticReport[]
+  allergies         AllergyIntolerance[]
+  alerts            HealthAlert[]
+  appointments      Appointment[]
+  vitals            VitalSign[]
+  immunizations     Immunization[]
+  profiles          Profile[]
 
   // ---- Household / consent graph ----
   operatedHousehold Household?            @relation("HouseholdOperator")
@@ -143,7 +146,13 @@ model Observation {
   valueString    String?
   unit           String?
   referenceRange String?
-  abnormalFlag   String? // H | L | A | null
+  abnormalFlag   String? // H | L | A | N | null (derived if absent)
+  // Canonical normalization (analyte-registry.ts / normalize.ts) — powers cross-source trends + ranges.
+  analyteId      String? // canonical analyte id, e.g. "a1c"
+  canonicalValue Float? // value converted to the analyte's canonical unit
+  canonicalUnit  String?
+  refLow         Float? // parsed/derived reference bounds in the canonical unit
+  refHigh        Float?
   effectiveAt    DateTime?
   recordedAt     DateTime          @default(now())
   confidence     Float             @default(1)
@@ -152,6 +161,7 @@ model Observation {
   reportId       String?
 
   @@index([userId, code])
+  @@index([userId, analyteId])
 }
 
 model Condition {
@@ -173,22 +183,68 @@ model Condition {
 }
 
 model MedicationStatement {
-  id         String    @id @default(cuid())
-  user       User      @relation(fields: [userId], references: [id])
-  userId     String
-  documentId String?
-  sourceType String
-  display    String
-  rxNormCode String?
-  dosage     String?
-  status     String? // active | completed | stopped
-  startDate  DateTime?
-  endDate    DateTime?
-  recordedAt DateTime  @default(now())
-  confidence Float     @default(1)
-  rawJson    String?
+  id               String               @id @default(cuid())
+  user             User                 @relation(fields: [userId], references: [id])
+  userId           String
+  documentId       String?
+  sourceType       String
+  display          String
+  rxNormCode       String?
+  dosage           String? // free-text as written, e.g. "500mg twice daily"
+  // Structured dosage (powers refill cadence + interaction/duplication checks).
+  doseValue        Float?
+  doseUnit         String? // "mg", "mcg", "mL", ...
+  frequency        String? // "once daily", "twice daily", "every 8 hours"
+  route            String? // "oral", "IV", "topical", ...
+  daysSupply       Int?
+  refillsRemaining Int?
+  nextRefillDue    DateTime?
+  status           String? // active | completed | stopped
+  startDate        DateTime?
+  endDate          DateTime?
+  recordedAt       DateTime             @default(now())
+  confidence       Float                @default(1)
+  rawJson          String?
+  schedules        MedicationSchedule[]
 
   @@index([userId])
+}
+
+// A dosing schedule for a medication: which local times of day to take it. Drives dose reminders
+// (to the member) and missed-dose alerts (to the caregiver). Operator-created; one per medication.
+model MedicationSchedule {
+  id            String              @id @default(cuid())
+  medication    MedicationStatement @relation(fields: [medicationId], references: [id], onDelete: Cascade)
+  medicationId  String
+  subjectUserId String // the member who takes it (denormalized for fast worker ticks)
+  label         String // display name snapshot, e.g. "Metformin 500mg"
+  times         String // JSON array of "HH:MM" 24h local times, e.g. ["08:00","18:00"]
+  active        Boolean             @default(true)
+  createdAt     DateTime            @default(now())
+  doses         DoseLog[]
+
+  @@index([active])
+  @@index([subjectUserId])
+}
+
+// One scheduled dose occurrence and whether it was taken. `pending` doses past their grace window
+// become `missed` and alert the caregiver. Unique on (schedule, scheduledAt) keeps ticks idempotent.
+model DoseLog {
+  id            String             @id @default(cuid())
+  schedule      MedicationSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  scheduleId    String
+  medicationId  String
+  subjectUserId String
+  label         String
+  scheduledAt   DateTime
+  takenAt       DateTime?
+  status        String             @default("pending") // pending | taken | missed | skipped
+  alertedAt     DateTime? // when the missed-dose caregiver alert was sent (idempotency)
+  createdAt     DateTime           @default(now())
+
+  @@unique([scheduleId, scheduledAt])
+  @@index([status, scheduledAt])
+  @@index([subjectUserId])
 }
 
 model DiagnosticReport {
@@ -264,6 +320,48 @@ model InsurancePlan {
   @@index([profileId])
 }
 
+// Structured vital signs (BP as systolic/diastolic, HR, weight, height, BMI). Flat enough to chart;
+// powers cardiovascular/weight trends & screening. Also mirrored into Observation for unified timeline.
+model VitalSign {
+  id         String    @id @default(cuid())
+  user       User      @relation(fields: [userId], references: [id])
+  userId     String
+  documentId String?
+  sourceType String
+  type       String // blood_pressure | heart_rate | weight | height | bmi | temperature | spo2
+  systolic   Int?
+  diastolic  Int?
+  pulse      Int?
+  valueNum   Float? // generic value for single-number vitals (weight/height/bmi/temp/spo2)
+  unit       String?
+  measuredAt DateTime?
+  recordedAt DateTime  @default(now())
+  confidence Float     @default(1)
+  rawJson    String?
+
+  @@index([userId, type])
+}
+
+// Immunizations (CVX-coded). Powers vaccine due/overdue follow-ups via the guideline catalog.
+model Immunization {
+  id             String    @id @default(cuid())
+  user           User      @relation(fields: [userId], references: [id])
+  userId         String
+  documentId     String?
+  sourceType     String
+  cvxCode        String? // CDC CVX code if known
+  display        String // e.g. "Influenza, seasonal" / "COVID-19 mRNA"
+  administeredAt DateTime?
+  doseNumber     Int?
+  series         String? // e.g. "primary", "booster"
+  nextDueAt      DateTime?
+  recordedAt     DateTime  @default(now())
+  confidence     Float     @default(1)
+  rawJson        String?
+
+  @@index([userId])
+}
+
 model Appointment {
   id              String    @id @default(cuid())
   user            User      @relation(fields: [userId], references: [id])
@@ -290,19 +388,24 @@ model Appointment {
 
 // Output of the cross-diagnosis analysis pass.
 model HealthAlert {
-  id                 String    @id @default(cuid())
-  user               User      @relation(fields: [userId], references: [id])
-  userId             String
-  severity           String    @default("info") // info | watch | urgent
+  id                   String    @id @default(cuid())
+  user                 User      @relation(fields: [userId], references: [id])
+  userId               String
+  severity             String    @default("info") // info | watch | urgent
   // Higher rank = surfaces nearer the top of the Today briefing. Set by the Insight engine.
-  rank               Float     @default(0)
-  category           String? // screening | refill | trend | coverage | follow_up | ...
-  title              String
-  detail             String
-  relatedResourceIds String? // JSON array of resource ids this alert connects
-  generatedByJobId   String?
-  acknowledgedAt     DateTime?
-  createdAt          DateTime  @default(now())
+  rank                 Float     @default(0)
+  category             String? // screening | refill | trend | coverage | follow_up | ...
+  title                String
+  detail               String
+  relatedResourceIds   String? // JSON array of resource ids this alert connects
+  // Structured, actionable follow-up.
+  followUpType         String? // book_visit | retest | refill | referral | vaccine | med_review
+  recommendedSpecialty String?
+  daysToAction         Int?
+  guideline            String? // citation, e.g. "USPSTF Grade A", "ADA 2024"
+  generatedByJobId     String?
+  acknowledgedAt       DateTime?
+  createdAt            DateTime  @default(now())
 
   @@index([userId, acknowledgedAt])
 }
@@ -451,17 +554,17 @@ model Task {
 
 // Time- or event-triggered nudge. The scheduler tick fires due reminders into Messages.
 model Reminder {
-  id            String   @id @default(cuid())
+  id                  String   @id @default(cuid())
   subject             User     @relation("ReminderSubject", fields: [subjectUserId], references: [id])
   subjectUserId       String
   taskId              String?
   sourceAppointmentId String? // set for auto-generated appointment reminders (dedupe + cancel)
   title               String
   fireAt              DateTime
-  repeatRule    String? // null | daily | weekly | monthly
-  channel       String   @default("push")
-  status        String   @default("scheduled") // scheduled | fired | cancelled
-  createdAt     DateTime @default(now())
+  repeatRule          String? // null | daily | weekly | monthly
+  channel             String   @default("push")
+  status              String   @default("scheduled") // scheduled | fired | cancelled
+  createdAt           DateTime @default(now())
 
   @@index([status, fireAt])
   @@index([subjectUserId])

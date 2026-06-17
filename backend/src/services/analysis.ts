@@ -7,14 +7,10 @@ import Anthropic from "@anthropic-ai/sdk";
 import { runTool, llmAvailable } from "./llm-tool.js";
 import { prisma } from "../db.js";
 import { toJson } from "./json.js";
-
-interface DraftAlert {
-  severity: "info" | "watch" | "urgent";
-  title: string;
-  detail: string;
-  relatedResourceIds: string[];
-  category?: string;
-}
+import type { DraftAlert } from "./insights-types.js";
+import { evaluateGuidelines } from "./guidelines.js";
+import { detectMedIssues } from "./med-safety.js";
+import { trendAlerts } from "./trends.js";
 
 /** Higher rank surfaces nearer the top of the Today briefing. */
 function rankFor(severity: DraftAlert["severity"]): number {
@@ -50,77 +46,56 @@ const ALERT_TOOL: Anthropic.Tool = {
 
 /** Run analysis for one user and persist any new alerts. Returns the number created. */
 export async function runAnalysis(userId: string, generatedByJobId?: string): Promise<number> {
-  const [observations, conditions, medications] = await Promise.all([
-    prisma.observation.findMany({ where: { userId }, orderBy: { recordedAt: "desc" }, take: 200 }),
+  const [observations, conditions, medications, immunizations, demo] = await Promise.all([
+    prisma.observation.findMany({ where: { userId }, orderBy: { recordedAt: "desc" }, take: 300 }),
     prisma.condition.findMany({ where: { userId }, orderBy: { recordedAt: "desc" }, take: 100 }),
     prisma.medicationStatement.findMany({ where: { userId }, orderBy: { recordedAt: "desc" }, take: 100 }),
+    prisma.immunization.findMany({ where: { userId }, orderBy: { recordedAt: "desc" }, take: 100 }),
+    prisma.user.findUnique({ where: { id: userId }, select: { dob: true, sex: true } }),
   ]);
 
   const drafts: DraftAlert[] = [];
 
-  // 1) Deterministic: flag abnormal observations.
+  // 1) Deterministic: flag abnormal observations (uses derived flag from canonicalization).
   for (const o of observations) {
     if (o.abnormalFlag && o.abnormalFlag !== "N") {
       drafts.push({
         severity: o.abnormalFlag === "H" || o.abnormalFlag === "L" ? "watch" : "info",
+        category: "abnormal",
         title: `${o.display} out of range`,
-        detail: `${o.display} was ${o.valueNum ?? o.valueString ?? "?"}${o.unit ? " " + o.unit : ""}` +
-          `${o.referenceRange ? ` (reference ${o.referenceRange})` : ""}. Consider discussing with your provider.`,
+        detail: `${o.display} was ${o.canonicalValue ?? o.valueNum ?? o.valueString ?? "?"}${o.canonicalUnit ?? (o.unit ? " " + o.unit : "")}` +
+          `${o.refLow != null || o.refHigh != null ? ` (reference ${o.refLow ?? ""}–${o.refHigh ?? ""})` : o.referenceRange ? ` (reference ${o.referenceRange})` : ""}. Consider discussing with your provider.`,
         relatedResourceIds: [o.id],
-        category: "trend",
+        followUpType: "retest",
+        recommendedSpecialty: "primary care",
+        daysToAction: 30,
+        guideline: "Reference range",
       });
     }
   }
 
-  // 1b) Proactive gaps (deterministic + conservative — "discuss with your provider", never diagnose).
-  {
-    const now = Date.now();
-    const DAY = 86_400_000;
-    const obsTime = (o: { effectiveAt: Date | null; recordedAt: Date }) => (o.effectiveAt ?? o.recordedAt).getTime();
-    const latestMatching = (re: RegExp): number | undefined =>
-      observations.filter((o) => re.test(o.display)).map(obsTime).sort((a, b) => b - a)[0];
-    const activeConds = conditions.filter((c) => (c.clinicalStatus ?? "active") === "active");
+  // 1b) Screening / vaccine / monitoring / med-therapy gaps from the evidence-based catalog.
+  drafts.push(
+    ...evaluateGuidelines(
+      { dob: demo?.dob, sex: demo?.sex },
+      {
+        conditions: conditions.map((c) => ({ id: c.id, display: c.display, clinicalStatus: c.clinicalStatus })),
+        observations: observations.map((o) => ({ analyteId: o.analyteId, effectiveAt: o.effectiveAt, recordedAt: o.recordedAt })),
+        immunizations: immunizations.map((i) => ({ display: i.display, administeredAt: i.administeredAt, recordedAt: i.recordedAt })),
+        medications: medications.map((m) => ({ display: m.display, status: m.status })),
+      },
+    ),
+  );
 
-    for (const c of activeConds) {
-      const d = c.display.toLowerCase();
-      if (d.includes("diabet")) {
-        const last = latestMatching(/a1c|glyco|hemoglobin a1c/i);
-        if (!last || now - last > 180 * DAY) {
-          drafts.push({
-            severity: "watch",
-            title: "A1c check may be due",
-            detail: "You have an active diabetes diagnosis and no recent A1c on file. Consider scheduling one and discussing your targets with your provider.",
-            relatedResourceIds: [c.id],
-            category: "screening",
-          });
-        }
-      }
-      if (d.includes("hypertens") || d.includes("high blood pressure")) {
-        const last = latestMatching(/blood pressure|systolic|diastolic/i);
-        if (!last || now - last > 180 * DAY) {
-          drafts.push({
-            severity: "info",
-            title: "Blood pressure check may be due",
-            detail: "You have an active hypertension diagnosis and no recent blood-pressure reading on file. Consider a check and discussing it with your provider.",
-            relatedResourceIds: [c.id],
-            category: "screening",
-          });
-        }
-      }
-    }
-    if (activeConds.length && observations.length) {
-      const newest = observations.map(obsTime).sort((a, b) => b - a)[0];
-      if (newest && now - newest > 365 * DAY) {
-        drafts.push({
-          severity: "info",
-          title: "Time for a check-up?",
-          detail: "It's been over a year since your last recorded result. A routine visit may be worth scheduling.",
-          relatedResourceIds: [],
-          category: "screening",
-        });
-      }
-    }
-  }
+  // 1c) Medication safety: duplication, interactions, refills.
+  drafts.push(
+    ...detectMedIssues(
+      medications.map((m) => ({ id: m.id, display: m.display, rxNormCode: m.rxNormCode, status: m.status, nextRefillDue: m.nextRefillDue })),
+    ),
+  );
+
+  // 1d) Longitudinal trends across canonical values.
+  drafts.push(...trendAlerts(observations));
 
   // 2) LLM cross-diagnosis pass (only when configured).
   if (llmAvailable() && (conditions.length || observations.length)) {
@@ -151,6 +126,10 @@ export async function runAnalysis(userId: string, generatedByJobId?: string): Pr
         title: d.title,
         detail: d.detail,
         relatedResourceIds: toJson(d.relatedResourceIds),
+        followUpType: d.followUpType,
+        recommendedSpecialty: d.recommendedSpecialty,
+        daysToAction: d.daysToAction,
+        guideline: d.guideline,
         generatedByJobId,
       },
     });

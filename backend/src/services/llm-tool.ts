@@ -17,6 +17,15 @@ export interface ToolSpec {
 
 export type LlmContent = string | Anthropic.ContentBlockParam[];
 
+// OpenRouter's built-in PDF text extractor (free engine; good for digital/text PDFs). Sent on every
+// OpenAI-compatible request — ignored when no file part is present.
+const PDF_PLUGIN = [{ id: "file-parser", pdf: { engine: "pdf-text" } }];
+
+/** Does the content carry a PDF/document block? (so we attach the file-parser plugin). */
+function hasDocument(content: LlmContent): boolean {
+  return Array.isArray(content) && content.some((b) => b.type === "document");
+}
+
 /** True when some LLM (Anthropic or an OpenAI-compatible endpoint like OpenRouter) is configured. */
 export function llmAvailable(): boolean {
   return (
@@ -60,6 +69,7 @@ export async function runText(opts: { system: string; content: LlmContent; maxTo
           { role: "system", content: opts.system },
           { role: "user", content: toOpenAiContent(opts.content) },
         ],
+        ...(hasDocument(opts.content) ? { plugins: PDF_PLUGIN } : {}),
         stream: false,
       }),
     });
@@ -107,18 +117,26 @@ async function openAiRunTool<T>(opts: { system: string; content: LlmContent; too
       ],
       tools: [{ type: "function", function: { name: opts.tool.name, description: opts.tool.description, parameters: opts.tool.input_schema } }],
       tool_choice: { type: "function", function: { name: opts.tool.name } },
+      ...(hasDocument(opts.content) ? { plugins: PDF_PLUGIN } : {}),
       stream: false,
     }),
   });
   if (!res.ok) throw new Error(`LLM endpoint ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const json = (await res.json()) as {
-    choices?: { message?: { tool_calls?: { function: { name: string; arguments: string } }[]; content?: string } }[];
+    choices?: { finish_reason?: string; message?: { tool_calls?: { function: { name: string; arguments: string } }[]; content?: string } }[];
   };
-  const call = json.choices?.[0]?.message?.tool_calls?.[0];
+  const choice = json.choices?.[0];
+  const call = choice?.message?.tool_calls?.[0];
   if (!call) return null;
   try {
     return JSON.parse(call.function.arguments) as T;
-  } catch {
+  } catch (err) {
+    // Most common cause: the tool JSON was truncated because max_tokens was hit.
+    console.error(
+      `runTool(${opts.tool.name}) could not parse tool arguments` +
+        (choice?.finish_reason === "length" ? " — output was truncated (raise maxTokens)" : "") +
+        `: ${(err as Error).message}`,
+    );
     return null;
   }
 }
@@ -133,8 +151,9 @@ function toOpenAiContent(content: LlmContent): unknown {
     } else if (block.type === "image" && block.source.type === "base64") {
       parts.push({ type: "image_url", image_url: { url: `data:${block.source.media_type};base64,${block.source.data}` } });
     } else if (block.type === "document" && (block.source as { type?: string }).type === "base64") {
-      // PDFs: most OpenAI-compatible providers don't OCR raw PDFs; note it so the model isn't confused.
-      parts.push({ type: "text", text: "[A PDF document was provided but cannot be read by this model; extract only from any text above.]" });
+      // PDFs: OpenRouter parses these via its file-parser plugin (see PDF_PLUGIN on the request).
+      const src = block.source as { media_type?: string; data: string };
+      parts.push({ type: "file", file: { filename: "document.pdf", file_data: `data:${src.media_type ?? "application/pdf"};base64,${src.data}` } });
     }
   }
   return parts;
