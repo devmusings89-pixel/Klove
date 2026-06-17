@@ -18,7 +18,11 @@ export const STRUCTURED_DATA_SCHEMA = {
         "booked = an appointment was confirmed; options_collected = offered times gathered but NOT booked (patient must choose); info_needed = blocked because the office required information we did not have AND the patient could not be reached to provide it; transferred = you warm-transferred the office to the patient so they could continue live; no_availability = office had nothing; no_human = voicemail/no answer; failed = other.",
     },
     appointmentBooked: { type: "boolean", description: "True only if an appointment was actually confirmed." },
-    appointmentDateTime: { type: "string", description: "Date and time of the booked appointment, or empty." },
+    appointmentDateTime: {
+      type: "string",
+      description:
+        "Date and time of the booked appointment in ISO 8601 format (e.g. 2026-06-23T14:00:00), or empty if not booked. Convert the office's stated day/time to ISO — do NOT return natural language like 'tomorrow at 2pm'.",
+    },
     confirmation: { type: "string", description: "Confirmation number or details given by the office, or empty." },
     offeredSlots: {
       type: "array",
@@ -68,7 +72,7 @@ If callMode is "gather":
 2. State the patient's name, DOB, reason for visit, and insurance.
 3. Ask for an appointment matching the preferred times.
 4. Decision:
-   - If an available slot falls within the acceptable window, BOOK it, confirm the exact date/time, get a confirmation number. Set outcome="booked".
+   - If an available slot falls within the acceptable window, BOOK it, confirm the exact date/time, get a confirmation number. Set outcome="booked" and record appointmentDateTime in ISO 8601 (e.g. 2026-06-23T14:00:00).
    - If NOTHING fits the acceptable window, DO NOT book. Instead collect 2-3 specific available date/time slots the office can offer, tell them the patient will call back to confirm, and end politely. Set outcome="options_collected" and list the slots in offeredSlots.
    - If the office has no availability at all, set outcome="no_availability".
 

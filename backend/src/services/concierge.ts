@@ -293,11 +293,11 @@ export async function reconcileConciergeJobs(): Promise<void> {
 
     if (booked) {
       const sd = fromJson<CallStructuredData | null>(booked.results[0]?.structuredData ?? null, null);
-      // The AI may return a natural-language time ("tomorrow, 2 PM") that Date can't parse. Never let
-      // an invalid date throw on appointment.create (which would leave the task stuck on "waiting");
-      // fall back to a near-future placeholder so the booking still finalizes.
+      // Prefer a real parsed date; if the AI returned natural language ("tomorrow, 2 PM") we keep
+      // startsAt empty (so we never show a fabricated precise time) and display the AI's own wording.
       const parsed = sd?.appointmentDateTime ? new Date(sd.appointmentDateTime) : null;
-      const when = parsed && !Number.isNaN(parsed.getTime()) ? parsed : new Date(Date.now() + 3 * 86_400_000);
+      const when = parsed && !Number.isNaN(parsed.getTime()) ? parsed : null;
+      const whenText = when ? whenLabel(when) : sd?.appointmentDateTime?.trim() || "a time the office confirmed";
       const confirmation = sd?.confirmation || confirmationCode();
       await prisma.appointment.create({
         data: {
@@ -310,12 +310,12 @@ export async function reconcileConciergeJobs(): Promise<void> {
           startsAt: when,
           status: "scheduled",
           confirmation,
-          notes: `Booked by Klove (live) · job ${session.id}`,
+          notes: `Booked by Klove (live) · job ${session.id}${when ? "" : ` · time: ${whenText}`}`,
         },
       });
       await prisma.task.update({
         where: { id: task.id },
-        data: { state: "handled", detail: `Confirmed for ${whenLabel(when)} with ${booked.officeName} · ${confirmation}` },
+        data: { state: "handled", detail: `Confirmed for ${whenText} with ${booked.officeName} · ${confirmation}` },
       });
       await prisma.message.create({
         data: {
@@ -324,11 +324,11 @@ export async function reconcileConciergeJobs(): Promise<void> {
           direction: "out",
           channel: "inapp",
           title: "Booked",
-          body: `Done — booked for ${whenLabel(when)} with ${booked.officeName}. Confirmation ${confirmation}.`,
+          body: `Done — booked for ${whenText} with ${booked.officeName}. Confirmation ${confirmation}.`,
           relatedTaskId: task.id,
         },
       });
-      await pushToOperator(task.householdId, "Booked ✅", `${reason} is booked for ${whenLabel(when)} with ${booked.officeName}.`);
+      await pushToOperator(task.householdId, "Booked ✅", `${reason} is booked for ${whenText} with ${booked.officeName}.`);
     } else if (choosing) {
       // The requested time wasn't available — the office offered alternates. Ask the operator to pick.
       const slots = fromJson<string[]>(choosing.offeredSlots, []);
