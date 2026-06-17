@@ -40,6 +40,11 @@ export const config = {
   // until you opt in. Set LIVE_BOOKING=true once you're ready to place real bookings.
   liveBooking: (process.env.LIVE_BOOKING ?? "false") === "true",
 
+  // Strict "nothing simulated" mode. When true, the server REFUSES TO BOOT if any subsystem would
+  // run in simulated/mock mode (see simulatedSubsystems() / the boot guard in index.ts). Use this to
+  // guarantee a deploy is fully live. Off by default so local/dev mock runs aren't blocked.
+  requireLive: (process.env.REQUIRE_LIVE ?? "false") === "true",
+
   vapi: {
     apiKey: process.env.VAPI_API_KEY ?? "",
     assistantId: process.env.VAPI_ASSISTANT_ID ?? "",
@@ -58,6 +63,15 @@ export const config = {
   },
 
   googlePlacesApiKey: process.env.GOOGLE_PLACES_API_KEY ?? "",
+
+  // OpenRouter — when OPENROUTER_API_KEY is set, ALL Anthropic/analysis LLM calls (extraction,
+  // analysis, Ask, intake, triage, prep) route through OpenRouter's OpenAI-compatible API against an
+  // Anthropic model. No direct ANTHROPIC_API_KEY needed; OpenRouter takes priority over it.
+  openRouter: {
+    apiKey: process.env.OPENROUTER_API_KEY ?? "",
+    baseUrl: process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1",
+    model: process.env.OPENROUTER_MODEL ?? "anthropic/claude-opus-4.8",
+  },
 
   // Web-automation agent (Playwright + a pluggable LLM brain).
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
@@ -126,6 +140,12 @@ export const enabled = {
   supabaseAuth: () => Boolean(config.supabase.jwtSecret),
   gmail: () => Boolean(config.google.clientId && config.google.clientSecret && config.google.redirectUri),
   aggregator: () => Boolean(config.aggregator.apiKey && config.aggregator.baseUrl),
-  // Health extraction reuses the Anthropic key already used by the web agent.
-  healthExtraction: () => Boolean(config.anthropicApiKey),
+  // Any analysis LLM is configured: OpenRouter (preferred), native Anthropic, or an
+  // OpenAI-compatible endpoint (e.g. local Ollama). Mirrors resolveLlm() in llm-tool.ts.
+  healthExtraction: () =>
+    Boolean(
+      config.openRouter.apiKey ||
+        config.anthropicApiKey ||
+        (config.webAgent.provider === "openai-compatible" && config.webAgent.apiKey),
+    ),
 };

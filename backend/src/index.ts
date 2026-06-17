@@ -26,6 +26,7 @@ import { runSchedulerTick } from "./services/orchestrator.js";
 import { runExtractionTick, runIngestionTick } from "./services/health-worker.js";
 import { runReminderTick, autoGenerateReminders } from "./services/reminders.js";
 import { runMedicationDoseTick, runMissedDoseTick, runRefillTick } from "./services/medications.js";
+import { smsEnabled } from "./services/sms.js";
 import { reconcileConciergeJobs } from "./services/concierge.js";
 
 // HIPAA: never log request/response bodies (they carry PHI) and redact identity headers. The
@@ -188,6 +189,54 @@ if (isProduction) {
     app.log.error(`Refusing to start in production: missing required secrets: ${missing.join(", ")}`);
     process.exit(1);
   }
+}
+
+// "Nothing simulated" audit. Each entry is a subsystem that would run in mock/simulated mode given
+// the current env, plus the env var(s) that take it live. With REQUIRE_LIVE=true the server refuses
+// to boot while this list is non-empty; otherwise it logs a one-time warning banner at startup.
+function simulatedSubsystems(): { name: string; fix: string }[] {
+  const out: { name: string; fix: string }[] = [];
+  if (!enabled.healthExtraction())
+    out.push({ name: "AI extraction / analysis / Ask / intake / triage (returns deterministic sample data)", fix: "OPENROUTER_API_KEY (or ANTHROPIC_API_KEY)" });
+  if (!config.liveBooking)
+    out.push({ name: "Booking concierge (provisional holds only, never contacts an office)", fix: "LIVE_BOOKING=true" });
+  else if (!enabled.vapi())
+    out.push({ name: "Booking voice calls (live booking on, but Vapi unconfigured)", fix: "VAPI_API_KEY + VAPI_ASSISTANT_ID + VAPI_PHONE_NUMBER_ID" });
+  if (!config.vapi.webhookSecret)
+    out.push({ name: "Vapi call-result callbacks (unauthenticated — anyone could POST results)", fix: "VAPI_WEBHOOK_SECRET" });
+  if (!enabled.googlePlaces())
+    out.push({ name: "Office phone lookup (live booking falls back to simulated without contact info)", fix: "GOOGLE_PLACES_API_KEY" });
+  if (!enabled.stripe())
+    out.push({ name: "Payments (mock-payment endpoint instead of Stripe)", fix: "STRIPE_SECRET_KEY" });
+  if (!enabled.resend())
+    out.push({ name: "Email sending (logged, not delivered)", fix: "RESEND_API_KEY" });
+  if (!smsEnabled())
+    out.push({ name: "SMS sending (logged, not delivered)", fix: "TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_FROM_NUMBER" });
+  if (!enabled.apns())
+    out.push({ name: "Push notifications (no-op)", fix: "APNS_KEY_ID + APNS_TEAM_ID + APNS_BUNDLE_ID + APNS_KEY_PATH" });
+  if (!enabled.supabase())
+    out.push({ name: "Document storage (local mock store instead of Supabase Storage)", fix: "SUPABASE_SERVICE_ROLE_KEY" });
+  if (!enabled.supabaseAuth())
+    out.push({ name: "Auth (dev header-trust — does NOT verify Supabase JWTs)", fix: "SUPABASE_JWT_SECRET" });
+  if (!enabled.gmail())
+    out.push({ name: "Gmail email source", fix: "GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET + GOOGLE_REDIRECT_URI" });
+  if (!enabled.aggregator())
+    out.push({ name: "Records aggregator source (Metriport)", fix: "AGGREGATOR_API_KEY" });
+  if (!config.encryptionKey)
+    out.push({ name: "OAuth-token encryption at rest", fix: "HEALTH_ENCRYPTION_KEY" });
+  return out;
+}
+
+const simulated = simulatedSubsystems();
+if (simulated.length === 0) {
+  app.log.info("Live mode: no simulated subsystems.");
+} else {
+  const banner = simulated.map((s) => `  • ${s.name}\n      → set ${s.fix}`).join("\n");
+  if (config.requireLive) {
+    app.log.error(`REQUIRE_LIVE is set but ${simulated.length} subsystem(s) are still simulated:\n${banner}`);
+    process.exit(1);
+  }
+  app.log.warn(`${simulated.length} subsystem(s) running SIMULATED/mock (set REQUIRE_LIVE=true to enforce live-only):\n${banner}`);
 }
 
 app
