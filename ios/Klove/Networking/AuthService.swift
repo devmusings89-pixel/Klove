@@ -76,6 +76,53 @@ final class AuthService: NSObject {
         errorMessage = nil
     }
 
+    /// Create a Supabase account with email + password.
+    @discardableResult
+    func signUpWithEmail(_ email: String, _ password: String) async -> Bool {
+        await emailAuth(path: "/auth/v1/signup", email: email, password: password, isSignup: true)
+    }
+
+    /// Sign in to an existing Supabase account with email + password.
+    @discardableResult
+    func signInWithEmail(_ email: String, _ password: String) async -> Bool {
+        await emailAuth(path: "/auth/v1/token?grant_type=password", email: email, password: password, isSignup: false)
+    }
+
+    private func emailAuth(path: String, email: String, password: String, isSignup: Bool) async -> Bool {
+        guard !Config.supabaseURL.isEmpty, !Config.supabaseAnonKey.isEmpty else {
+            errorMessage = "Email accounts need Supabase configured."
+            return false
+        }
+        guard let url = URL(string: "\(Config.supabaseURL)\(path)") else { return false }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["email": email, "password": password])
+
+        guard let (data, resp) = try? await URLSession.shared.data(for: req) else {
+            errorMessage = "Couldn't reach the sign-in service."
+            return false
+        }
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? 500
+        guard status < 300 else {
+            errorMessage = (json?["msg"] ?? json?["error_description"] ?? json?["error"]) as? String
+                ?? (isSignup ? "Couldn't create the account." : "Wrong email or password.")
+            return false
+        }
+        if let token = json?["access_token"] as? String {
+            UserDefaults.standard.set(token, forKey: AppStorageKey.authToken)
+            UserDefaults.standard.set(Self.emailFromJWT(token) ?? email, forKey: AppStorageKey.userEmail)
+            UserDefaults.standard.set(true, forKey: AppStorageKey.hasOnboarded)
+            errorMessage = nil
+            return true
+        }
+        // Signup with email-confirmation ON returns a user but no session.
+        errorMessage = "Account created — confirm via the email we sent, then sign in."
+        return false
+    }
+
     func signOut() {
         UserDefaults.standard.removeObject(forKey: AppStorageKey.authToken)
         UserDefaults.standard.removeObject(forKey: AppStorageKey.userEmail)

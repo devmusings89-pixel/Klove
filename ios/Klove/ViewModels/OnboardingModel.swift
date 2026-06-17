@@ -12,6 +12,7 @@ final class OnboardingModel {
 
     var step: Step = .welcome
     var email: String = UserDefaults.standard.string(forKey: AppStorageKey.userEmail) ?? ""
+    var password: String = ""
     var identifyError: String?
 
     /// Source connection is shared with Settings via SourcesModel.

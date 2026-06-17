@@ -5,6 +5,19 @@ import AuthenticationServices
 /// Completion is signaled by setting the `hasOnboarded` flag, which the app root observes.
 struct OnboardingView: View {
     @State private var model = OnboardingModel()
+    @State private var authBusy = false
+
+    private func emailAuth(signup: Bool) async {
+        authBusy = true
+        defer { authBusy = false }
+        model.identifyError = nil
+        let email = model.email.trimmingCharacters(in: .whitespaces)
+        let ok = signup
+            ? await AuthService.shared.signUpWithEmail(email, model.password)
+            : await AuthService.shared.signInWithEmail(email, model.password)
+        if !ok { model.identifyError = AuthService.shared.errorMessage }
+        // On success, AuthService sets hasOnboarded → the app root switches to MainTabView.
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -126,6 +139,23 @@ struct OnboardingView: View {
                 .textContentType(.emailAddress)
                 .padding()
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+
+            SecureField("Password", text: $model.password)
+                .textContentType(.password)
+                .padding()
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+
+            HStack(spacing: 10) {
+                Button { Task { await emailAuth(signup: false) } } label: {
+                    Text("Sign in").font(.headline).frame(maxWidth: .infinity).frame(height: 46)
+                        .overlay(Capsule().stroke(Color(.systemGray3), lineWidth: 1))
+                }
+                Button { Task { await emailAuth(signup: true) } } label: {
+                    Text("Create account").font(.headline).frame(maxWidth: .infinity).frame(height: 46)
+                        .foregroundStyle(.white).background(Theme.accent, in: Capsule())
+                }
+            }
+            .disabled(!model.email.contains("@") || model.password.count < 6 || authBusy)
 
             if let error = model.identifyError {
                 Text(error).font(.footnote).foregroundStyle(.red)

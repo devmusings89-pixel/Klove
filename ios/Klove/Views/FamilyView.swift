@@ -5,6 +5,8 @@ import SwiftUI
 struct FamilyView: View {
     @Environment(HouseholdStore.self) private var store
     @State private var showAdd = false
+    @State private var justAddedAdult: AddMemberResponse?
+    @State private var pendingInvite: AddMemberResponse?
 
     var body: some View {
         ScrollView {
@@ -39,8 +41,14 @@ struct FamilyView: View {
         .navigationDestination(for: HouseholdMember.self) { member in
             MemberProfileView(memberId: member.userId)
         }
-        .sheet(isPresented: $showAdd) {
-            AddMemberView().environment(store)
+        .sheet(isPresented: $showAdd, onDismiss: {
+            // Present the invite only after the Add sheet has fully dismissed (avoids sheet-on-sheet).
+            if let adult = justAddedAdult { justAddedAdult = nil; pendingInvite = adult }
+        }) {
+            AddMemberView(onInvite: { justAddedAdult = $0 }).environment(store)
+        }
+        .sheet(item: $pendingInvite) { adult in
+            InviteMemberView(memberId: adult.userId, memberName: adult.displayName ?? "this member").environment(store)
         }
         .refreshable { await store.load() }
         .task { if store.members.isEmpty { await store.load() } }

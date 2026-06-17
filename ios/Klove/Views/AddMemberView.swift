@@ -3,13 +3,14 @@ import SwiftUI
 /// Add a person to the household. Minors and aging parents become managed members immediately;
 /// a consenting adult is created as a pending member and flows straight into the invite screen.
 struct AddMemberView: View {
+    /// Called when a consenting adult is added — the presenter shows the invite flow after dismiss.
+    var onInvite: (AddMemberResponse) -> Void = { _ in }
     @Environment(HouseholdStore.self) private var store
     @Environment(\.dismiss) private var dismiss
 
     @State private var name = ""
     @State private var type: NewMemberType = .minor
     @State private var working = false
-    @State private var inviteFor: AddMemberResponse?
 
     var body: some View {
         NavigationStack {
@@ -50,10 +51,6 @@ struct AddMemberView: View {
                         .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || working)
                 }
             }
-            .sheet(item: $inviteFor) { created in
-                InviteMemberView(memberId: created.userId, memberName: created.displayName ?? name)
-                    .environment(store)
-            }
             .tint(Theme.accent)
         }
     }
@@ -62,11 +59,8 @@ struct AddMemberView: View {
         working = true
         defer { working = false }
         guard let created = await store.addMember(name: name.trimmingCharacters(in: .whitespaces), type: type) else { return }
-        if type == .consentingAdult {
-            inviteFor = created          // continue into the invite flow
-        } else {
-            dismiss()                    // managed member is ready immediately
-        }
+        if type == .consentingAdult { onInvite(created) } // presenter opens invite after this sheet closes
+        dismiss()
     }
 }
 
