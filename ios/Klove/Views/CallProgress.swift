@@ -58,7 +58,14 @@ struct SessionLiveCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .kloveCard()
+        .sensoryFeedback(.success, trigger: bookedConfirmed)
         .task { await poll() }
+    }
+
+    /// True once an office has actually booked — drives the success haptic.
+    private var bookedConfirmed: Bool {
+        guard let s = session else { return false }
+        return bookedDetails(s) != nil
     }
 
     /// Phone/website for any office on the session, so an anxious caregiver has an immediate fallback.

@@ -44,6 +44,7 @@ struct RecordsView: View {
             .padding(20)
         }
         .background(Theme.background.ignoresSafeArea())
+        .contentMargins(.bottom, 80, for: .scrollContent)
         .navigationTitle("Records")
         .task { await initialLoad() }
         .refreshable { await loadTimeline() }

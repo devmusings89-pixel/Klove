@@ -13,6 +13,7 @@ struct MedicationsView: View {
     @State private var editing: MemberMedication?
     @State private var errorMessage: String?
     @State private var pendingDoseId: String?
+    @State private var takenHaptic = 0
     private let api = APIClient()
 
     var body: some View {
@@ -30,6 +31,8 @@ struct MedicationsView: View {
             .padding(20)
         }
         .background(Theme.background.ignoresSafeArea())
+        .contentMargins(.bottom, 80, for: .scrollContent)
+        .sensoryFeedback(.success, trigger: takenHaptic)
         .navigationTitle("Medications")
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
@@ -164,7 +167,11 @@ struct MedicationsView: View {
 
     private func setStatus(_ dose: Dose, _ status: String) async {
         pendingDoseId = dose.id; defer { pendingDoseId = nil }
-        do { _ = try await api.setDoseStatus(dose.id, status: status); await load() }
+        do {
+            _ = try await api.setDoseStatus(dose.id, status: status)
+            if status == "taken" { takenHaptic += 1 }
+            await load()
+        }
         catch { errorMessage = (error as? AppError)?.errorDescription ?? error.localizedDescription }
     }
 

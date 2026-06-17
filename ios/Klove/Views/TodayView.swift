@@ -6,6 +6,7 @@ struct TodayView: View {
     @Environment(HouseholdStore.self) private var store
     @State private var briefing: TodayBriefing?
     @State private var loading = true
+    @State private var loadFailed = false
     @State private var showSettings = false
     @State private var showNotifications = false
     @State private var unread = 0
@@ -24,13 +25,14 @@ struct TodayView: View {
                     if !b.waiting.isEmpty { section("Waiting on a provider", tasks: b.waiting, tint: Theme.waiting) }
                     if !b.handled.isEmpty { section("Recently handled", tasks: b.handled, tint: Theme.handled) }
                     watchingCard(b)
-                } else {
+                } else if loadFailed {
                     ConnectionErrorView { Task { await load() } }
                 }
             }
             .padding(20)
         }
         .background(Theme.background.ignoresSafeArea())
+        .contentMargins(.bottom, 80, for: .scrollContent)
         .navigationTitle("Today")
         .navigationDestination(for: KloveTask.self) { TaskDetailView(task: $0, onChange: { Task { await load() } }) }
         .toolbar {
@@ -56,7 +58,13 @@ struct TodayView: View {
     private func load() async {
         loading = true
         defer { loading = false }
-        briefing = try? await api.getToday()
+        do {
+            // Only overwrite good data on success — a failed refresh shouldn't blank the briefing.
+            briefing = try await api.getToday()
+            loadFailed = false
+        } catch {
+            loadFailed = true
+        }
         await loadUnread()
     }
 

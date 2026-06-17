@@ -37,6 +37,7 @@ struct FamilyView: View {
             .padding(20)
         }
         .background(Theme.background.ignoresSafeArea())
+        .contentMargins(.bottom, 80, for: .scrollContent)
         .navigationTitle("Family")
         .navigationDestination(for: HouseholdMember.self) { member in
             MemberProfileView(memberId: member.userId)

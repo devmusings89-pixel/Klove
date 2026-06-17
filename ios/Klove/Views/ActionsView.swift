@@ -29,6 +29,7 @@ struct ActionsView: View {
             .padding(20)
         }
         .background(Theme.background.ignoresSafeArea())
+        .contentMargins(.bottom, 80, for: .scrollContent)
         .navigationTitle("Actions")
         .navigationDestination(for: KloveTask.self) { TaskDetailView(task: $0, onChange: { Task { await load() } }) }
         .toolbar {
