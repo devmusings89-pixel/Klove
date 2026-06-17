@@ -7,10 +7,37 @@ struct SessionProgressView: View {
     @Environment(Router.self) private var router
     @State private var state: SessionState?
     @State private var errorMessage: String?
+    /// True when polling stopped on an error that won't recover on its own (4xx / expired session).
+    /// We keep showing the last good state, but with a banner + Retry so it's never silently stale.
+    @State private var stalled = false
+    /// Bumping this restarts the polling `.task`.
+    @State private var retryAttempt = 0
     private let api = APIClient()
 
     var body: some View {
         List {
+            if let errorMessage {
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(stalled ? "Live updates paused" : "Reconnecting…",
+                              systemImage: stalled ? "wifi.exclamationmark" : "arrow.triangle.2.circlepath")
+                            .font(.kloveSectionHeader)
+                            .foregroundStyle(stalled ? Theme.needsYou : Theme.inkSecondary)
+                        Text(errorMessage).font(.footnote).foregroundStyle(Theme.inkSecondary)
+                        if stalled {
+                            Button {
+                                retryAttempt += 1
+                            } label: {
+                                Label("Retry", systemImage: "arrow.clockwise")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Theme.accent)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                .listRowBackground(Theme.surface)
+            }
             if let state {
                 Section {
                     Label(SessionStatusCopy.title(state.status), systemImage: SessionStatusCopy.icon(state.status))
@@ -69,10 +96,7 @@ struct SessionProgressView: View {
                     }
                     .listRowBackground(Theme.surface)
                 }
-            } else if let errorMessage {
-                Text(errorMessage).foregroundStyle(.red)
-                    .listRowBackground(Theme.surface)
-            } else {
+            } else if errorMessage == nil {
                 ProgressView("Starting calls…").tint(Theme.accent)
             }
         }
@@ -80,24 +104,31 @@ struct SessionProgressView: View {
         .kloveBackground()
         .tint(Theme.accent)
         .navigationTitle("Progress")
-        .task { await poll() }
+        .task(id: retryAttempt) { await poll() }
     }
 
     private func poll() async {
-        // Poll until the session reaches a terminal state. Back off on transient errors and STOP on
-        // an HTTP 4xx (e.g. 403/404 after the auth changes) — those won't recover by retrying, so
-        // looping forever would just hammer the backend.
+        // Poll until the session reaches a terminal state. Transient/network errors back off and keep
+        // retrying (banner shows "Reconnecting…"). A 4xx won't recover on its own, so we STOP and flip
+        // `stalled` — the user sees the last good state with a Retry button instead of a silently frozen
+        // screen (and a 401 tells them their session expired rather than spinning forever).
         var delay = 2
+        stalled = false
         while !Task.isCancelled {
             do {
                 let s = try await api.getSession(id: sessionId)
                 state = s
                 errorMessage = nil
+                stalled = false
                 delay = 2 // recovered — reset backoff
                 if s.isTerminal { return }
             } catch {
-                errorMessage = (error as? AppError)?.errorDescription ?? error.localizedDescription
-                if case .server(let status, _)? = error as? AppError, (400..<500).contains(status) { return }
+                let appError = error as? AppError
+                errorMessage = appError?.userMessage ?? error.localizedDescription
+                if appError?.isPermanentClientError == true {
+                    stalled = true // surface a Retry affordance; don't hammer the backend
+                    return
+                }
                 delay = min(delay * 2, 30) // exponential backoff on transient/network errors
             }
             try? await Task.sleep(for: .seconds(delay))

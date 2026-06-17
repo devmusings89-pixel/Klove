@@ -15,4 +15,28 @@ enum AppError: LocalizedError {
         case .validationError(let message): return message
         }
     }
+
+    /// Safe, user-facing copy (never leaks raw server strings or status codes).
+    var userMessage: String {
+        switch self {
+        case .networkError: return "Couldn't reach Klove. Check your connection and try again."
+        case .server(let status, _) where status == 401: return "Your session expired. Sign in again, then retry."
+        case .server(let status, _) where (400..<500).contains(status): return "Klove couldn't load this — it may no longer be available."
+        case .server: return "Klove hit a problem on its end. Trying again…"
+        case .decoding: return "Couldn't read Klove's response."
+        case .validationError(let message): return message
+        }
+    }
+
+    /// 401 specifically — the session is gone and the user must re-authenticate.
+    var isUnauthorized: Bool {
+        if case .server(let status, _) = self { return status == 401 }
+        return false
+    }
+
+    /// A 4xx that won't recover by simply waiting and retrying the same request.
+    var isPermanentClientError: Bool {
+        if case .server(let status, _) = self { return (400..<500).contains(status) }
+        return false
+    }
 }

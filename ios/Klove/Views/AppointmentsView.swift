@@ -143,6 +143,9 @@ private struct InProgressRow: View {
 
 private struct KloveBookingRow: View {
     let booking: KloveBooking
+    // Only office-confirmed targets (status == "booked") become a KloveBooking — provisional holds
+    // surface as Appointments via AppointmentRow, which renders their unconfirmed state. So this row
+    // is always a confirmed booking and the green seal is correct.
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "checkmark.seal.fill").foregroundStyle(.green).font(.title3).frame(width: 28)
