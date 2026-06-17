@@ -127,7 +127,19 @@ final class AuthService: NSObject {
     ///      corporate link-scanners (which otherwise pre-consume the one-time OTP → otp_expired).
     @discardableResult
     func signUpWithEmail(_ email: String, _ password: String) async -> Bool {
-        await emailAuth(path: "/auth/v1/signup", email: email, password: password, isSignup: true)
+        if await emailAuth(path: "/auth/v1/signup", email: email, password: password, isSignup: true) {
+            return true
+        }
+        // Signup returned no session. Two cases land here when email confirmation is OFF:
+        //   1) the address is already registered — Supabase obfuscates that as a 200 with no session
+        //      (anti-enumeration), which looks identical to "confirmation required";
+        //   2) some GoTrue versions don't return a session on signup even with confirmation off.
+        // In both, signing in succeeds. So try it: if confirmation is genuinely still ON, the sign-in
+        // returns "Email not confirmed" and friendlyAuthError surfaces the right message.
+        if authToken == nil {
+            return await emailAuth(path: "/auth/v1/token?grant_type=password", email: email, password: password, isSignup: false)
+        }
+        return false
     }
 
     /// Sign in to an existing Supabase account with email + password.
@@ -232,6 +244,10 @@ final class AuthService: NSObject {
     /// Map raw Supabase/GoTrue error strings to safe, user-facing copy.
     private static func friendlyAuthError(_ raw: String?, status: Int, isSignup: Bool) -> String {
         let lower = (raw ?? "").lowercased()
+        // Confirmation is still ON server-side: check this BEFORE the generic 400 handler.
+        if lower.contains("not confirmed") || lower.contains("confirm your email") {
+            return "Check your email to confirm your account, then sign in."
+        }
         if lower.contains("already registered") || lower.contains("already been registered") || status == 422 {
             return "That email is already registered. Try signing in instead."
         }
