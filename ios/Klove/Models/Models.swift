@@ -116,6 +116,7 @@ struct CallStructuredData: Codable, Hashable {
     let confirmation: String
     let offeredSlots: [String]
     let notes: String
+    var missingInfo: [String]? = nil   // info the office still needs (decoded when present)
 }
 
 struct CallResult: Codable, Hashable {

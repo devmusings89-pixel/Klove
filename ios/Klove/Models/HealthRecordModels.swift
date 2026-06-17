@@ -115,6 +115,10 @@ struct Appointment: Codable, Hashable, Identifiable {
     let confirmation: String?
     let notes: String?
     let confidence: Double
+    var verified: Bool? = nil
+
+    /// A confirmed-looking visit Klove only provisionally held (no live office confirmation).
+    var isProvisional: Bool { verified == false }
 
     /// True when the appointment is in the future, or has no date yet (nil). A *present but
     /// unparseable* `startsAt` is a data error, not a future appointment: log it and treat it as not

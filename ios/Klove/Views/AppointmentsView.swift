@@ -178,7 +178,10 @@ struct AppointmentRow: View {
                     Label(location, systemImage: "mappin.and.ellipse")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                if let confirmation = appointment.confirmation {
+                if appointment.isProvisional {
+                    Label("Provisional — not yet confirmed", systemImage: "exclamationmark.circle")
+                        .font(.caption2.weight(.semibold)).foregroundStyle(.orange)
+                } else if let confirmation = appointment.confirmation {
                     Text("Confirmation: \(confirmation)").font(.caption2).foregroundStyle(.secondary)
                 }
             }

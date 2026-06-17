@@ -59,7 +59,7 @@ struct SessionProgressView: View {
                 }
                 if state.status == "completed", state.targets.contains(where: { $0.status == "booked" || $0.status == "transferred" }) {
                     Section {
-                        Label("A summary has been emailed to you.", systemImage: "envelope")
+                        Label("Saved to Today, Actions, and the member's timeline.", systemImage: "tray.full")
                             .foregroundStyle(.secondary)
                     }
                 }

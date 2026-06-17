@@ -189,7 +189,9 @@ struct OfficeRow: View {
         .padding(.vertical, 2)
     }
 
-    private var isProvisional: Bool { target.result?.structuredData?.outcome == "simulated" }
+    private var isProvisional: Bool {
+        target.result?.structuredData?.outcome == "simulated" || target.status == "requested"
+    }
 
     /// Show the disclosure when there's a real transcript or a recording to surface.
     private var hasDetails: Bool {

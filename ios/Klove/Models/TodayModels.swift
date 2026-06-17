@@ -33,6 +33,10 @@ struct UpcomingAppt: Decodable, Identifiable, Hashable {
     let startsAt: String?
     let subjectUserId: String?
     let memberName: String?
+    var verified: Bool? = nil
+
+    /// A provisional hold Klove placed without a live office confirmation.
+    var isProvisional: Bool { verified == false }
 
     var whenDisplay: String {
         guard let s = startsAt, let d = ISO8601DateFormatter().date(from: s) else { return "Time TBD" }

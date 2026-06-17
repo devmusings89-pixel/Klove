@@ -28,11 +28,25 @@ struct AppointmentDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .kloveCard()
 
+                if appt.isProvisional {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("Provisional hold", systemImage: "exclamationmark.triangle.fill")
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(.orange)
+                        Text("Klove placed this time but hasn't confirmed it with the office yet. Don't rely on it until it's confirmed.")
+                            .font(.caption).foregroundStyle(Theme.inkSecondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .kloveCard()
+                }
+
                 if let note { Text(note).font(.caption).foregroundStyle(Theme.handled).kloveCard() }
 
                 VStack(spacing: 10) {
                     actionButton("Reschedule", "calendar.badge.clock", Theme.accent) { showReschedule = true }
-                    actionButton("Log visit summary", "square.and.pencil", Theme.handled) { showSummary = true }
+                    // A provisional hold isn't a real visit yet — can't log a summary for it.
+                    if !appt.isProvisional {
+                        actionButton("Log visit summary", "square.and.pencil", Theme.handled) { showSummary = true }
+                    }
                     Button(role: .destructive) { confirmCancel = true } label: {
                         Label("Cancel appointment", systemImage: "xmark.circle")
                             .frame(maxWidth: .infinity).padding(.vertical, 12)

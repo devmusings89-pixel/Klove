@@ -121,6 +121,10 @@ struct TodayView: View {
                             Text(a.title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
                             Text([a.memberName, a.provider].compactMap { $0 }.joined(separator: " · "))
                                 .font(.caption).foregroundStyle(Theme.inkSecondary)
+                            if a.isProvisional {
+                                Label("Provisional — not yet confirmed", systemImage: "exclamationmark.circle")
+                                    .font(.caption2.weight(.semibold)).foregroundStyle(.orange)
+                            }
                         }
                         Spacer()
                         Image(systemName: "chevron.right").font(.caption).foregroundStyle(Theme.inkSecondary)
