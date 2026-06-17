@@ -13,7 +13,43 @@ import { toJson, fromJson } from "./json.js";
 import { placeNextCall } from "./orchestrator.js";
 import { lookupPhoneNumber, lookupWebsite } from "./lookup.js";
 import { sendPushToUser } from "./push.js";
+import { decryptToken } from "./crypto.js";
 import type { CallStructuredData } from "../types.js";
+
+/**
+ * Assemble the patient details the AI needs to introduce on the call (name, DOB, insurance), pulled
+ * from the member's saved profile — falling back to the operator's profile for insurance/phone, since
+ * a managed member (e.g. a child) is often on the operator's plan.
+ */
+async function buildPatientInfo(
+  subjectUserId: string,
+  operatorUserId: string,
+  input: BookingInput,
+  reason: string,
+): Promise<Record<string, string>> {
+  const member = await prisma.user.findUnique({ where: { id: subjectUserId }, select: { displayName: true, dob: true } });
+  const memberProfile = await prisma.profile.findFirst({
+    where: { userId: subjectUserId },
+    orderBy: { isPrimary: "desc" },
+    include: { insurance: true },
+  });
+  const opProfile =
+    operatorUserId !== subjectUserId
+      ? await prisma.profile.findFirst({ where: { userId: operatorUserId }, orderBy: { isPrimary: "desc" }, include: { insurance: true } })
+      : null;
+  const plan = memberProfile?.insurance?.[0] ?? opProfile?.insurance?.[0];
+  const memberId = plan?.memberIdEnc ? decryptToken(plan.memberIdEnc) : "";
+  return {
+    name: (member?.displayName || memberProfile?.fullName || "the patient").trim(),
+    dob: memberProfile?.dob || (member?.dob ? member.dob.toISOString().slice(0, 10) : ""),
+    reason,
+    insurance: [plan?.carrier, plan?.planName].filter(Boolean).join(" "),
+    additionalInfo: memberId ? `Insurance member ID: ${memberId}` : "",
+    preferredTimes: input.preferredTimes ?? input.preferredDate ?? "",
+    acceptableWindow: input.preferredTimes ?? "",
+    patientPhone: memberProfile?.phone || opProfile?.phone || "",
+  };
+}
 
 /** Push to the operator who runs this household (the person managing the booking). */
 async function pushToOperator(householdId: string, title: string, body: string): Promise<void> {
@@ -67,16 +103,15 @@ export async function bookAppointment(
   // office name alone is enough to book live.
   const canLookup = enabled.googlePlaces() && Boolean(input.provider?.trim());
   if (config.liveBooking && (hasContact || canLookup)) {
-    return liveBooking(subjectUserId, householdId, input);
+    return liveBooking(operatorUserId, subjectUserId, householdId, input);
   }
   return simulatedBooking(subjectUserId, householdId, input);
 }
 
 /** Create a real booking job and start the orchestrator. Returns immediately (async result). */
-async function liveBooking(subjectUserId: string, householdId: string, input: BookingInput): Promise<BookingOutcome> {
+async function liveBooking(operatorUserId: string, subjectUserId: string, householdId: string, input: BookingInput): Promise<BookingOutcome> {
   const reason = input.reason.trim() || "Appointment";
   const provider = input.provider?.trim() || null;
-  const member = await prisma.user.findUnique({ where: { id: subjectUserId }, select: { displayName: true } });
 
   // Resolve how to reach the office: explicit contact wins; otherwise look it up by name via Places.
   let phone = input.phone?.trim() || null;
@@ -91,19 +126,16 @@ async function liveBooking(subjectUserId: string, householdId: string, input: Bo
     return simulatedBooking(subjectUserId, householdId, input);
   }
 
+  // Full patient details (name, DOB, insurance) so the AI can introduce the patient on the call.
+  const patient = await buildPatientInfo(subjectUserId, operatorUserId, input, reason);
+
   const session = await prisma.session.create({
     data: {
       userId: subjectUserId,
       tier: "human",
       kind: "booking",
       status: "paid", // skip payment; concierge job is authorized by the operator
-      patientInfo: toJson({
-        name: member?.displayName ?? "",
-        reason,
-        // Free-text preference guides the AI on the call; an exact date (from prep) is the window.
-        preferredTimes: input.preferredTimes ?? input.preferredDate ?? "",
-        acceptableWindow: input.preferredTimes ?? "",
-      }),
+      patientInfo: toJson(patient),
       targets: {
         create: {
           officeName: provider ?? reason,
@@ -261,7 +293,11 @@ export async function reconcileConciergeJobs(): Promise<void> {
 
     if (booked) {
       const sd = fromJson<CallStructuredData | null>(booked.results[0]?.structuredData ?? null, null);
-      const when = sd?.appointmentDateTime ? new Date(sd.appointmentDateTime) : new Date(Date.now() + 3 * 86_400_000);
+      // The AI may return a natural-language time ("tomorrow, 2 PM") that Date can't parse. Never let
+      // an invalid date throw on appointment.create (which would leave the task stuck on "waiting");
+      // fall back to a near-future placeholder so the booking still finalizes.
+      const parsed = sd?.appointmentDateTime ? new Date(sd.appointmentDateTime) : null;
+      const when = parsed && !Number.isNaN(parsed.getTime()) ? parsed : new Date(Date.now() + 3 * 86_400_000);
       const confirmation = sd?.confirmation || confirmationCode();
       await prisma.appointment.create({
         data: {

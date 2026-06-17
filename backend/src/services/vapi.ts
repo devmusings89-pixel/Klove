@@ -102,8 +102,8 @@ export function buildVariableValues(
   opts: { mode: CallMode; chosenSlot?: string; priorContext?: string } = { mode: "gather" },
 ): Record<string, string> {
   return {
-    patientName: p.name,
-    patientDob: p.dob,
+    patientName: p.name?.trim() || "the patient",
+    patientDob: p.dob || "not provided",
     patientReason: p.reason,
     patientInsurance: p.insurance || "not provided",
     patientPreferredTimes: p.preferredTimes || "any available time",
@@ -138,10 +138,11 @@ export async function createCall(opts: {
   const mode = opts.mode ?? "gather";
   // Pin an explicit opening line so the assistant greets the instant the office answers (no
   // model-generation pause, which otherwise reads as dead air on pickup).
+  const patientName = opts.patient.name?.trim() || "a patient";
   const firstMessage =
     mode === "book"
-      ? `Hi, this is the AI assistant calling back about ${opts.patient.name}'s appointment. This call may be recorded. Do you have a moment?`
-      : `Hi, this is an AI assistant calling on behalf of ${opts.patient.name} to schedule an appointment. This call may be recorded. Do you have a moment?`;
+      ? `Hi, this is the AI assistant calling back about ${patientName}'s appointment. This call may be recorded. Do you have a moment?`
+      : `Hi, this is an AI assistant calling on behalf of ${patientName} to schedule an appointment. This call may be recorded. Do you have a moment?`;
 
   // Tools attached per call. `endCall` lets the assistant hang up the moment it's done (booked /
   // options collected / etc.) instead of waiting for the office to end the call. transferCall is
