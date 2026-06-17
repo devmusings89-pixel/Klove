@@ -77,13 +77,13 @@ struct SessionProgressView: View {
         // Poll until the session reaches a terminal state. Back off on transient errors and STOP on
         // an HTTP 4xx (e.g. 403/404 after the auth changes) — those won't recover by retrying, so
         // looping forever would just hammer the backend.
-        var delay = 3
+        var delay = 2
         while !Task.isCancelled {
             do {
                 let s = try await api.getSession(id: sessionId)
                 state = s
                 errorMessage = nil
-                delay = 3 // recovered — reset backoff
+                delay = 2 // recovered — reset backoff
                 if s.isTerminal { return }
             } catch {
                 errorMessage = (error as? AppError)?.errorDescription ?? error.localizedDescription

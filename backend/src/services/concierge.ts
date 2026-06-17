@@ -242,6 +242,7 @@ export async function reconcileConciergeJobs(): Promise<void> {
   });
 
   for (const task of waiting) {
+   try {
     const session = await prisma.session.findUnique({
       where: { id: task.conciergeJobId! },
       include: { targets: { include: { results: { orderBy: { createdAt: "desc" } } } } },
@@ -373,5 +374,9 @@ export async function reconcileConciergeJobs(): Promise<void> {
       });
       await pushToOperator(task.householdId, "Action needed", `Klove couldn't finish booking ${reason} — tap to review.`);
     }
+   } catch (err) {
+      // Isolate per-job failures so one malformed/orphaned booking can't block all the others.
+      console.error("reconcile failed for task", task.id, err);
+   }
   }
 }

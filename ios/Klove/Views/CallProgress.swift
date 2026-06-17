@@ -73,7 +73,7 @@ struct SessionLiveCard: View {
         while !Task.isCancelled {
             await loadOnce()
             if let s = session, s.isTerminal { return }
-            try? await Task.sleep(for: .seconds(4))
+            try? await Task.sleep(for: .seconds(2))
         }
     }
 }

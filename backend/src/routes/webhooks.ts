@@ -3,6 +3,7 @@ import { prisma } from "../db.js";
 import { config, enabled, isProduction } from "../config.js";
 import { constructWebhookEvent } from "../services/stripe.js";
 import { placeNextCall, recordCallResult } from "../services/orchestrator.js";
+import { reconcileConciergeJobs } from "../services/concierge.js";
 import type { CallStructuredData } from "../types.js";
 import { gmailSource } from "../sources/gmail.js";
 import { aggregatorSource } from "../sources/aggregator.js";
@@ -76,6 +77,9 @@ export async function webhookRoutes(app: FastifyInstance) {
         endedReason: msg.endedReason,
         durationSec,
       });
+      // Reflect the outcome immediately instead of waiting for the 60s reconcile tick: turn a
+      // just-booked concierge job into a confirmed appointment + handled task right now.
+      void reconcileConciergeJobs().catch((e) => app.log.error({ err: e }, "reconcile after call failed"));
     }
 
     return reply.send({ received: true });

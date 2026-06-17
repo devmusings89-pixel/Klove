@@ -20,9 +20,12 @@ const assistant = {
   firstMessage:
     "Hi, this is an AI assistant calling on behalf of a patient to schedule an appointment. This call may be recorded. Do you have a moment?",
   transcriber: { provider: "deepgram", model: "nova-2", language: "en" },
-  // NOTE: the transferCall tool is injected per call (via assistantOverrides) with the real
-  // patient number — Vapi rejects a Liquid template here as it validates E.164 at save time.
-  model: { ...ASSISTANT_MODEL },
+  // The endCall tool lets the assistant hang up itself once the booking outcome is decided (it does
+  // not wait for the office). The transferCall tool is injected per call (via assistantOverrides)
+  // with the real patient number — Vapi rejects a Liquid template here as it validates E.164 at save.
+  model: { ...ASSISTANT_MODEL, tools: [{ type: "endCall" }] },
+  // Backstop in case the model doesn't invoke the tool.
+  endCallPhrases: ["goodbye", "have a good day", "have a great day", "take care", "bye now"],
   voice: { provider: "vapi", voiceId: "Elliot" },
   // Force structured outcome + summary at end of call → arrives in end-of-call-report webhook.
   analysisPlan: {

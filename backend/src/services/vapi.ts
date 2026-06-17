@@ -77,6 +77,12 @@ If callMode is "book":
 - If that exact slot is no longer available, collect the nearest 2-3 alternatives, set outcome="options_collected", and end politely.
 
 If you reach voicemail in either mode, leave a brief message with the patient's name and reason, set outcome="no_human", and end the call.
+
+Ending the call (IMPORTANT):
+- The moment the outcome is decided — the appointment is booked and you've read back the date/time and any confirmation number, OR you've collected the offered options, OR info is needed, OR there's no availability, OR you hit voicemail — give a short, polite thank-you and goodbye, then END THE CALL YOURSELF using the endCall tool.
+- Do NOT wait for the office to hang up, and do NOT keep the line open after the appointment is confirmed. Once you've confirmed the booking, you are done: say goodbye and end the call immediately.
+- Only stay on the line if you are mid warm-transfer to the patient.
+
 Keep responses short and natural. Do not invent information you were not given.`;
 
 /** Shared model config — single source of truth for both assistant creation and per-call overrides. */
@@ -135,37 +141,32 @@ export async function createCall(opts: {
       ? `Hi, this is the AI assistant calling back about ${opts.patient.name}'s appointment. This call may be recorded. Do you have a moment?`
       : `Hi, this is an AI assistant calling on behalf of ${opts.patient.name} to schedule an appointment. This call may be recorded. Do you have a moment?`;
 
-  // Warm-transfer to the patient when the agent is blocked on missing info. The destination
-  // must be a concrete E.164 number (Vapi rejects a template), so it's injected per call.
+  // Tools attached per call. `endCall` lets the assistant hang up the moment it's done (booked /
+  // options collected / etc.) instead of waiting for the office to end the call. transferCall is
+  // added only when a patient number is available (warm-transfer on blocked info).
   const transferNumber = toE164(opts.patient.patientPhone);
-  const modelOverride = transferNumber
-    ? {
-        // Overriding `model` requires the FULL model object (provider/model/messages), not just tools.
-        model: {
-          ...ASSISTANT_MODEL,
-          tools: [
-            {
-              type: "transferCall",
-              destinations: [
-                {
-                  type: "number",
-                  number: transferNumber,
-                  message: "Please hold one moment while I connect you with the patient.",
-                  transferPlan: {
-                    mode: "warm-transfer-experimental",
-                    fallbackPlan: {
-                      message:
-                        "I wasn't able to reach the patient. They'll follow up with that information shortly. Thank you.",
-                      endCallEnabled: false,
-                    },
-                  },
-                },
-              ],
+  const tools: Record<string, unknown>[] = [{ type: "endCall" }];
+  if (transferNumber) {
+    tools.push({
+      type: "transferCall",
+      destinations: [
+        {
+          type: "number",
+          number: transferNumber,
+          message: "Please hold one moment while I connect you with the patient.",
+          transferPlan: {
+            mode: "warm-transfer-experimental",
+            fallbackPlan: {
+              message: "I wasn't able to reach the patient. They'll follow up with that information shortly. Thank you.",
+              endCallEnabled: false,
             },
-          ],
+          },
         },
-      }
-    : {};
+      ],
+    });
+  }
+  // Overriding `model` requires the FULL model object (provider/model/messages), not just tools.
+  const modelOverride = { model: { ...ASSISTANT_MODEL, tools } };
 
   const baseOverrides = {
     variableValues: buildVariableValues(opts.patient, {
@@ -174,20 +175,22 @@ export async function createCall(opts: {
       priorContext: opts.priorContext,
     }),
     ...(firstMessage ? { firstMessage } : {}),
+    // Backstop so the call ends promptly even if the model doesn't invoke the endCall tool.
+    endCallPhrases: ["goodbye", "have a good day", "have a great day", "take care", "bye now"],
     // serverUrl is configured on the assistant; overriding here keeps webhooks pointed at us.
     server: { url: `${config.publicBaseUrl}/webhooks/vapi`, secret: config.vapi.webhookSecret || undefined },
   };
 
-  const buildBody = (withTransferTool: boolean) => ({
+  const buildBody = (withToolOverride: boolean) => ({
     assistantId: config.vapi.assistantId,
     phoneNumberId: config.vapi.phoneNumberId,
     customer: { number: opts.customerNumber },
-    assistantOverrides: { ...baseOverrides, ...(withTransferTool ? modelOverride : {}) },
+    assistantOverrides: { ...baseOverrides, ...(withToolOverride ? modelOverride : {}) },
   });
 
-  // Resilience: if Vapi rejects the per-call transfer-tool override (4xx), retry WITHOUT it so
-  // the call still goes through — the async info-recover loop is the safety net for transfers.
-  let includeTool = Boolean(transferNumber);
+  // Resilience: if Vapi rejects the per-call tool/model override (4xx), retry WITHOUT it so the
+  // call still goes through — the base assistant still ends via endCallPhrases.
+  let includeTool = true;
   let lastErr: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) await sleep(500 * 2 ** (attempt - 1));
