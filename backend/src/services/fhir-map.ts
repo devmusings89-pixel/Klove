@@ -3,8 +3,12 @@
 
 import { prisma } from "../db.js";
 import { toJson } from "./json.js";
-import { canonicalize } from "./normalize.js";
+import { canonicalize, normSex, type RawObs } from "./normalize.js";
 import type { SourceType } from "../sources/types.js";
+
+// Neutral default confidence when an extractor/source doesn't supply one. Avoids a fake 1.0 (100%)
+// that would imply certainty we don't have. 0.5 reads as "unknown / not asserted".
+const DEFAULT_CONFIDENCE = 0.5;
 
 /** Whole-years age from a date of birth, or undefined. */
 function ageFrom(dob?: Date | null): number | undefined {
@@ -14,12 +18,28 @@ function ageFrom(dob?: Date | null): number | undefined {
   return Math.floor(ms / (365.25 * 86_400_000));
 }
 
-/** True if an observation for this analyte already exists on the same calendar day (dedup). */
-async function sameDayExists(userId: string, analyteId: string, eff: Date): Promise<boolean> {
+/**
+ * True if an identical observation already exists on the same calendar day (dedup of a lab
+ * re-ingested from another source). We key on analyte + value + source so two *different* readings
+ * on the same day (e.g. AM and PM glucose) both survive — only an exact re-ingest is dropped.
+ */
+async function sameDayDuplicateExists(
+  userId: string,
+  analyteId: string,
+  eff: Date,
+  valueNum: number | null | undefined,
+  sourceType: SourceType,
+): Promise<boolean> {
   const dayStart = new Date(eff); dayStart.setHours(0, 0, 0, 0);
   const dayEnd = new Date(eff); dayEnd.setHours(23, 59, 59, 999);
   const hit = await prisma.observation.findFirst({
-    where: { userId, analyteId, effectiveAt: { gte: dayStart, lte: dayEnd } },
+    where: {
+      userId,
+      analyteId,
+      sourceType,
+      valueNum: valueNum ?? null,
+      effectiveAt: { gte: dayStart, lte: dayEnd },
+    },
     select: { id: true },
   });
   return hit !== null;
@@ -122,6 +142,53 @@ function date(s?: string): Date | undefined {
   return Number.isNaN(d.getTime()) ? undefined : d;
 }
 
+/**
+ * Canonical key for a provider/office name so trivial spelling/punctuation/honorific differences
+ * collapse to one identity ("Dr. Lin" == "Dr Lin" == "DR. LIN"). This is the server-side twin of the
+ * iOS `providerKey` used for the "Book again" list, so the derived doctor index is stable across
+ * sources instead of fragmenting on formatting. Kept here (the FHIR-mapping boundary) so any code
+ * deriving providers from appointments/practitioners can dedupe consistently.
+ *
+ * NOTE: This is additive — it sits alongside the labs vitals→Observation bridge above and does not
+ * touch it. The ad-hoc lowercased-name dedupe in services/intake.ts (matchProviders, NOT in this
+ * lane's ownership) should adopt this helper; doing so is the one out-of-lane change that finishes
+ * item #6 end-to-end.
+ */
+export function providerKey(raw: string | null | undefined): string {
+  if (!raw) return "";
+  let s = raw.toLowerCase();
+  s = s.replace(/[.,]/g, " ").replace(/\s+/g, " ").trim();
+  const m = s.match(/^(dr|doctor|mr|mrs|ms)\s+(.*)$/);
+  if (m) s = m[2];
+  return s;
+}
+
+/**
+ * Decompose an extracted vital into the canonical-Observation components the analysis pipeline
+ * understands (item #9). A blood_pressure vital yields two observations (systolic + diastolic); the
+ * rest yield one. The `display` text is chosen to hit the analyte-registry aliases (systolic/
+ * diastolic/heart rate/weight/BMI) so canonicalize() assigns the right analyteId & range.
+ * Vital types with no registry analyte (height, temperature, spo2) are skipped.
+ */
+function vitalToObservations(v: ExtractedVital): RawObs[] {
+  const out: RawObs[] = [];
+  const t = (v.type ?? "").toLowerCase();
+  if (t === "blood_pressure" || v.systolic != null || v.diastolic != null) {
+    if (v.systolic != null) out.push({ display: "Systolic blood pressure", valueNum: v.systolic, unit: v.unit ?? "mmHg" });
+    if (v.diastolic != null) out.push({ display: "Diastolic blood pressure", valueNum: v.diastolic, unit: v.unit ?? "mmHg" });
+    return out;
+  }
+  if (t === "heart_rate" && (v.pulse != null || v.valueNum != null)) {
+    out.push({ display: "Heart rate", valueNum: v.pulse ?? v.valueNum, unit: v.unit ?? "bpm" });
+    return out;
+  }
+  // Single-value vitals that map to a registry analyte by display text.
+  const single: Record<string, string> = { weight: "Weight", body_weight: "Weight", bmi: "BMI" };
+  const display = single[t];
+  if (display && v.valueNum != null) out.push({ display, valueNum: v.valueNum, unit: v.unit });
+  return out;
+}
+
 /** Persist a normalized bundle into the FHIR-lite tables. Returns counts for the job summary. */
 export async function persistBundle(
   userId: string,
@@ -141,22 +208,25 @@ export async function persistBundle(
         display: firstReport.display,
         category: firstReport.category,
         issuedAt: date(firstReport.issuedAt),
-        confidence: firstReport.confidence ?? 1,
+        confidence: firstReport.confidence ?? DEFAULT_CONFIDENCE,
         rawJson: toJson(firstReport),
       },
     });
     reportId = r.id;
   }
 
-  // Demographics drive age/sex-aware reference ranges during canonicalization.
+  // Demographics drive age/sex-aware reference ranges during canonicalization. Normalize the raw
+  // sex value ("Male"/"M"/…) at this boundary so canonicalize() reliably gets "M"/"F".
   const demo = await prisma.user.findUnique({ where: { id: userId }, select: { dob: true, sex: true } });
   const age = ageFrom(demo?.dob);
+  const sex = normSex(demo?.sex);
   let observations = 0;
   for (const o of bundle.observations ?? []) {
-    const c = canonicalize(o, { age, sex: demo?.sex ?? undefined });
+    const c = canonicalize(o, { age, sex });
     const eff = date(o.effectiveAt);
-    // Reconcile: skip an exact analyte+day duplicate (same lab re-ingested from another source).
-    if (c.analyteId && eff && (await sameDayExists(userId, c.analyteId, eff))) continue;
+    // Reconcile: skip only an *exact* re-ingest (same analyte + value + source on the same day) so
+    // distinct same-day readings (e.g. AM/PM glucose) are both kept.
+    if (c.analyteId && eff && (await sameDayDuplicateExists(userId, c.analyteId, eff, o.valueNum, sourceType))) continue;
     await prisma.observation.create({
       data: {
         ...base,
@@ -174,7 +244,7 @@ export async function persistBundle(
         refLow: c.refLow,
         refHigh: c.refHigh,
         effectiveAt: eff,
-        confidence: o.confidence ?? 1,
+        confidence: o.confidence ?? DEFAULT_CONFIDENCE,
         rawJson: toJson(o),
       },
     });
@@ -189,7 +259,7 @@ export async function persistBundle(
         clinicalStatus: c.clinicalStatus,
         onsetDate: date(c.onsetDate),
         severity: c.severity,
-        confidence: c.confidence ?? 1,
+        confidence: c.confidence ?? DEFAULT_CONFIDENCE,
         rawJson: toJson(c),
       },
     });
@@ -213,7 +283,7 @@ export async function persistBundle(
         status: m.status,
         startDate,
         endDate: date(m.endDate),
-        confidence: m.confidence ?? 1,
+        confidence: m.confidence ?? DEFAULT_CONFIDENCE,
         rawJson: toJson(m),
       },
     });
@@ -229,10 +299,44 @@ export async function persistBundle(
         valueNum: v.valueNum,
         unit: v.unit,
         measuredAt: date(v.measuredAt),
-        confidence: v.confidence ?? 1,
+        confidence: v.confidence ?? DEFAULT_CONFIDENCE,
         rawJson: toJson(v),
       },
     });
+
+    // --- Vitals → canonical Observations bridge (item #9) -------------------------------------
+    // VitalSign rows carry no analyteId/canonicalValue, but trends.ts and the bp_monitoring
+    // guideline read Observation.analyteId. So we ALSO emit canonical Observations for each vital
+    // component (BP systolic/diastolic, heart rate, weight, BMI) here. This is what makes BP/weight
+    // trends and the "BP check may be due" alert actually fire. Kept self-contained in
+    // `vitalToObservations` below so it's easy to see/preserve.
+    // NOTE TO BOOKINGS SPECIALIST: this loop body (and `vitalToObservations`) is the labs vitals
+    // bridge — please don't drop it when you edit fhir-map.ts.
+    const eff = date(v.measuredAt);
+    for (const raw of vitalToObservations(v)) {
+      const c = canonicalize(raw, { age, sex });
+      if (!c.analyteId) continue;
+      if (eff && (await sameDayDuplicateExists(userId, c.analyteId, eff, raw.valueNum, sourceType))) continue;
+      await prisma.observation.create({
+        data: {
+          ...base,
+          reportId,
+          code: raw.code,
+          display: raw.display,
+          valueNum: raw.valueNum,
+          unit: raw.unit,
+          abnormalFlag: c.abnormalFlag,
+          analyteId: c.analyteId,
+          canonicalValue: c.canonicalValue,
+          canonicalUnit: c.canonicalUnit,
+          refLow: c.refLow,
+          refHigh: c.refHigh,
+          effectiveAt: eff,
+          confidence: v.confidence ?? DEFAULT_CONFIDENCE,
+          rawJson: toJson({ derivedFromVital: v.type, ...raw }),
+        },
+      });
+    }
   }
   for (const im of bundle.immunizations ?? []) {
     await prisma.immunization.create({
@@ -243,7 +347,7 @@ export async function persistBundle(
         administeredAt: date(im.administeredAt),
         doseNumber: im.doseNumber,
         series: im.series,
-        confidence: im.confidence ?? 1,
+        confidence: im.confidence ?? DEFAULT_CONFIDENCE,
         rawJson: toJson(im),
       },
     });
@@ -255,7 +359,7 @@ export async function persistBundle(
         substance: a.substance,
         reaction: a.reaction,
         severity: a.severity,
-        confidence: a.confidence ?? 1,
+        confidence: a.confidence ?? DEFAULT_CONFIDENCE,
         rawJson: toJson(a),
       },
     });
@@ -275,7 +379,7 @@ export async function persistBundle(
         status: ap.status ?? "scheduled",
         confirmation: ap.confirmation,
         notes: ap.notes,
-        confidence: ap.confidence ?? 1,
+        confidence: ap.confidence ?? DEFAULT_CONFIDENCE,
         rawJson: toJson(ap),
       },
     });
@@ -302,6 +406,18 @@ export function fhirToBundle(fhir: unknown): ExtractedBundle {
   const resources: unknown[] = isBundle(fhir)
     ? (fhir.entry ?? []).map((e) => e.resource)
     : [fhir];
+
+  // First pass: index Practitioner resources by reference id so an Appointment that points at one
+  // ("Practitioner/123") can resolve a real provider name instead of dropping it (item #6).
+  const practitioners = new Map<string, string>();
+  for (const res of resources) {
+    const r = res as Record<string, unknown> | null;
+    if (r && typeof r === "object" && r.resourceType === "Practitioner") {
+      const name = practitionerName(r);
+      const id = typeof r.id === "string" ? r.id : undefined;
+      if (id && name) practitioners.set(`Practitioner/${id}`, name);
+    }
+  }
 
   for (const res of resources) {
     if (!res || typeof res !== "object") continue;
@@ -343,6 +459,7 @@ export function fhirToBundle(fhir: unknown): ExtractedBundle {
       case "Appointment":
         out.appointments!.push({
           title: typeof r.description === "string" ? r.description : (textOf(r.serviceType) ?? "Appointment"),
+          provider: appointmentProvider(r, practitioners),
           startsAt: typeof r.start === "string" ? r.start : undefined,
           endsAt: typeof r.end === "string" ? r.end : undefined,
           status: typeof r.status === "string" ? r.status : undefined,
@@ -374,4 +491,32 @@ function codeOf(cc: unknown): string | undefined {
 function textOf(cc: unknown): string | undefined {
   const c = cc as any;
   return c?.text ?? c?.coding?.[0]?.display;
+}
+
+/** Human-readable name from a FHIR Practitioner (HumanName[0]). */
+function practitionerName(r: Record<string, unknown>): string | undefined {
+  const n = (r.name as any)?.[0] ?? r.name;
+  if (!n) return undefined;
+  if (typeof n.text === "string" && n.text.trim()) return n.text.trim();
+  const given = Array.isArray(n.given) ? n.given.join(" ") : "";
+  const full = [n.prefix?.[0], given, n.family].filter(Boolean).join(" ").trim();
+  return full || undefined;
+}
+
+/**
+ * Resolve the provider for a FHIR Appointment from its participants: prefer a participant whose
+ * actor references an indexed Practitioner; else fall back to the actor's display text. Returns
+ * undefined when no provider is named.
+ */
+function appointmentProvider(r: Record<string, unknown>, practitioners: Map<string, string>): string | undefined {
+  const participants = Array.isArray(r.participant) ? (r.participant as any[]) : [];
+  for (const p of participants) {
+    const ref = p?.actor?.reference;
+    if (typeof ref === "string" && practitioners.has(ref)) return practitioners.get(ref);
+  }
+  for (const p of participants) {
+    const display = p?.actor?.display;
+    if (typeof display === "string" && display.trim()) return display.trim();
+  }
+  return undefined;
 }

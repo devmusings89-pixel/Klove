@@ -3,7 +3,7 @@
 //  - runIngestionTick:  polls pollable sources (gmail/imap/aggregator) for new artifacts
 // MVP uses the DB table as the queue; swap for a real queue later without changing callers.
 
-import type { ExtractionJob } from "@prisma/client";
+import type { DataSourceConnection, ExtractionJob } from "@prisma/client";
 import { prisma } from "../db.js";
 import { getObject } from "./storage.js";
 import { extractDocument } from "./extraction.js";
@@ -92,25 +92,44 @@ async function fail(job: ExtractionJob, err: unknown): Promise<void> {
   });
 }
 
+export interface SyncResult {
+  scanned: number; // artifacts pulled from the source
+  queued: number; // new (non-duplicate) documents queued for extraction
+  error?: string; // auth/connection failure (e.g. wrong app password), if any
+}
+
+/**
+ * Sync one connection: pull artifacts, ingest them, and record status. Returns counts (and any
+ * error) so it can drive both the background tick and an on-demand "scan now" from the client.
+ * `conn` must be a full DataSourceConnection row (sources read tokens/config/cursor off it).
+ */
+export async function syncConnection(conn: DataSourceConnection): Promise<SyncResult> {
+  const source = pollableSources().find((s) => s.type === conn.type);
+  if (!source) return { scanned: 0, queued: 0, error: "source_not_pollable" };
+  try {
+    const artifacts = await source.sync(conn);
+    let queued = 0;
+    for (const a of artifacts) {
+      const r = await ingestArtifact(conn.userId, conn.type as SourceType, a, conn.id);
+      if (r.status === "queued") queued++;
+    }
+    await prisma.dataSourceConnection.update({
+      where: { id: conn.id },
+      data: { lastSyncedAt: new Date(), lastError: null },
+    });
+    return { scanned: artifacts.length, queued };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await prisma.dataSourceConnection.update({ where: { id: conn.id }, data: { lastError: message } });
+    return { scanned: 0, queued: 0, error: message };
+  }
+}
+
 /** Poll connected pollable sources (gmail/imap/aggregator) and ingest any new artifacts. */
 export async function runIngestionTick(): Promise<void> {
   const types = pollableSources().map((s) => s.type);
   const connections = await prisma.dataSourceConnection.findMany({
     where: { type: { in: types }, status: "connected" },
   });
-  for (const conn of connections) {
-    const source = pollableSources().find((s) => s.type === conn.type);
-    if (!source) continue;
-    try {
-      const artifacts = await source.sync(conn);
-      for (const a of artifacts) await ingestArtifact(conn.userId, conn.type as SourceType, a, conn.id);
-      await prisma.dataSourceConnection.update({
-        where: { id: conn.id },
-        data: { lastSyncedAt: new Date(), lastError: null },
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      await prisma.dataSourceConnection.update({ where: { id: conn.id }, data: { lastError: message } });
-    }
-  }
+  for (const conn of connections) await syncConnection(conn);
 }

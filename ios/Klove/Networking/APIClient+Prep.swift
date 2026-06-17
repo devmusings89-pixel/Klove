@@ -48,15 +48,31 @@ struct BookingOutcome: Decodable {
     let appointmentId: String?
     let confirmation: String?
     let startsAt: String?
-    let priceCents: Int?
+    let sessionId: String?
+    let verified: Bool?
 
     var isConfirmed: Bool { status == "confirmed" }
-    var needsPayment: Bool { status == "payment_required" }
+    /// A confirmed booking that Klove placed WITHOUT a live call — a hold, not an office confirmation.
+    var isProvisional: Bool { status == "confirmed" && verified == false }
 
     var whenDisplay: String {
-        guard let s = startsAt, let d = ISO8601DateFormatter().date(from: s) else { return "soon" }
-        let f = DateFormatter(); f.dateFormat = "MMM d 'at' h:mm a"
+        guard let s = startsAt, let d = ISO8601.parse(s) else { return "soon" }
+        let f = DateFormatter(); f.dateFormat = "MMM d 'at' h:mm a zzz"
         return f.string(from: d)
+    }
+}
+
+/// Tolerant ISO8601 parsing. The backend always emits fractional seconds (`.SSSZ`, see
+/// backend/src/routes/prep.ts), which `ISO8601DateFormatter` rejects by default — so booked times
+/// were rendering as "soon". Try with fractional seconds first, then fall back to plain ISO8601.
+enum ISO8601 {
+    static func parse(_ s: String) -> Date? {
+        // Built locally (not cached statics) so this stays Sendable-clean under Swift 6 strict
+        // concurrency; ISO8601DateFormatter isn't Sendable. Cheap enough for our call volume.
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = withFraction.date(from: s) { return d }
+        return ISO8601DateFormatter().date(from: s)
     }
 }
 

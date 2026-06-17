@@ -5,20 +5,41 @@
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { config, enabled } from "../config.js";
+import { config, enabled, isProduction } from "../config.js";
 import { prisma } from "../db.js";
 
 interface JwtClaims {
   sub?: string; // Supabase auth uid
   email?: string;
   exp?: number;
+  iss?: string;
+  aud?: string | string[];
 }
 
-/** Verify an HS256 Supabase JWT and return its claims, or null if invalid. */
+interface JwtHeader {
+  alg?: string;
+  typ?: string;
+}
+
+/**
+ * Verify an HS256 Supabase JWT and return its claims, or null if invalid.
+ * Validates: signature (HMAC-SHA256), header alg == HS256, expiry, and — when configured —
+ * the issuer and audience claims against the Supabase project.
+ */
 function verifySupabaseJwt(token: string): JwtClaims | null {
   const parts = token.split(".");
   if (parts.length !== 3) return null;
   const [headerB64, payloadB64, sigB64] = parts;
+
+  // Pin the algorithm: reject anything but HS256 (defends against alg-confusion / "none").
+  let header: JwtHeader;
+  try {
+    header = JSON.parse(Buffer.from(headerB64, "base64url").toString("utf8")) as JwtHeader;
+  } catch {
+    return null;
+  }
+  if (header.alg !== "HS256") return null;
+
   const expected = createHmac("sha256", config.supabase.jwtSecret)
     .update(`${headerB64}.${payloadB64}`)
     .digest();
@@ -27,6 +48,15 @@ function verifySupabaseJwt(token: string): JwtClaims | null {
   try {
     const claims = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8")) as JwtClaims;
     if (claims.exp && claims.exp * 1000 < Date.now()) return null;
+
+    // Issuer/audience binding to the Supabase project (skip only when not configured).
+    const expectedIss = config.supabase.jwtIssuer;
+    if (expectedIss && claims.iss !== expectedIss) return null;
+    const expectedAud = config.supabase.jwtAudience;
+    if (expectedAud) {
+      const audOk = Array.isArray(claims.aud) ? claims.aud.includes(expectedAud) : claims.aud === expectedAud;
+      if (!audOk) return null;
+    }
     return claims;
   } catch {
     return null;
@@ -47,6 +77,10 @@ async function resolveUser(req: FastifyRequest): Promise<{ id: string; email: st
     });
     return { id: user.id, email: claims.email };
   }
+
+  // Header-trust path is DEV ONLY. In production we never accept x-user-email — a deployment
+  // without SUPABASE_JWT_SECRET must refuse requests rather than impersonate dev@klove.app.
+  if (isProduction) throw new Error("auth_not_configured");
 
   // Mock mode: identify by header (mirrors the email-based upsert used by the sessions route).
   const email = (req.headers["x-user-email"] as string) || "dev@klove.app";

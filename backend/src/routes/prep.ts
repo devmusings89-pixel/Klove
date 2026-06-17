@@ -64,8 +64,9 @@ export async function prepRoutes(app: FastifyInstance) {
     return reply.send({ ok: true, authorizedAt: new Date().toISOString() });
   });
 
-  // Book on the member's behalf (concierge). Produces a confirmed appointment, a handled Task, and
-  // an inbox confirmation. Simulated/deterministic — never places live calls (see services/concierge.ts).
+  // Book on the member's behalf (concierge). Live (Vapi/web/email) when LIVE_BOOKING is on and we can
+  // reach the office; otherwise a provisional hold (verified:false) the office must still confirm.
+  // The outcome distinguishes the two so the client never presents a hold as a confirmed booking.
   app.post<{ Params: { id: string }; Body: { reason?: string; provider?: string; preferredDate?: string; preferredTimes?: string; phone?: string; website?: string } }>(
     "/members/:id/book",
     { preHandler: requireUser },
@@ -82,7 +83,9 @@ export async function prepRoutes(app: FastifyInstance) {
         phone: req.body?.phone,
         website: req.body?.website,
       });
-      await audit(req.user!.id, "booking_requested", userId, reason);
+      // Don't write the free-text visit reason (PHI) into the audit trail — the audit helper is
+      // explicitly "who did what, to whom, no PHI bodies". Record only that a booking was requested.
+      await audit(req.user!.id, "booking_requested", userId);
       return reply.code(201).send(outcome);
     },
   );

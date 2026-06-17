@@ -211,14 +211,20 @@ struct OnboardingView: View {
 
     private var footer: some View {
         VStack(spacing: 12) {
-            Button(action: primaryAction) {
-                Text(model.step.isLast ? "Finish" : "Continue")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
+            // The account step authenticates via its own Sign in / Create account
+            // actions. A generic "Continue" here would let users skip past auth, so
+            // the footer's primary button is omitted on that step — the screen offers
+            // only Log in or Register.
+            if model.step != .identify {
+                Button(action: primaryAction) {
+                    Text(model.step.isLast ? "Finish" : "Continue")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
             }
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.capsule)
 
             if model.step.isLast {
                 Button("Skip for now", action: { model.finish() })

@@ -7,7 +7,8 @@ struct AcceptInviteView: View {
     let token: String
     @Environment(\.dismiss) private var dismiss
 
-    @State private var email = ""
+    // Observe the real auth service so the view re-renders the moment a verified sign-in completes.
+    @State private var auth = AuthService.shared
     @State private var shareEverything = true
     @State private var shareRecords = false
     @State private var shareAppleHealth = false
@@ -18,10 +19,10 @@ struct AcceptInviteView: View {
     @State private var error: String?
     private let api = APIClient()
 
-    private var signedIn: Bool {
-        !(UserDefaults.standard.string(forKey: AppStorageKey.userEmail) ?? "").isEmpty
-            || UserDefaults.standard.string(forKey: AppStorageKey.authToken) != nil
-    }
+    // Acceptance must be tied to a *verified* identity: the backend now binds the invite to the
+    // invited email and only honors a matching, authenticated caller. So we require a real sign-in
+    // (Sign in with Apple / Google) — not a hand-typed email — before showing the accept controls.
+    private var signedIn: Bool { auth.isSignedIn }
 
     var body: some View {
         NavigationStack {
@@ -52,15 +53,13 @@ struct AcceptInviteView: View {
 
     private var identitySection: some View {
         Section {
-            Text("Sign in so Klove knows it's you, then choose what to share.")
+            Text("Sign in so Klove can verify it's really you, then choose what to share. The invite is tied to your verified identity, so a real sign-in is required to accept.")
                 .font(.subheadline).foregroundStyle(Theme.inkSecondary)
             SignInWithAppleButton(.signIn) { AuthService.shared.configure($0) } onCompletion: { AuthService.shared.handle($0) }
                 .signInWithAppleButtonStyle(.black).frame(height: 46).clipShape(Capsule())
             Button { Task { await AuthService.shared.signInWithGoogle() } } label: {
                 Label("Continue with Google", systemImage: "globe").frame(maxWidth: .infinity)
             }
-            HStack { TextField("…or your email", text: $email).keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
-                Button("Use") { saveEmail() }.disabled(!email.contains("@")) }
         } header: { Text("Who are you?") }
     }
 
@@ -94,11 +93,6 @@ struct AcceptInviteView: View {
         return cats
     }
 
-    private func saveEmail() {
-        UserDefaults.standard.set(email.trimmingCharacters(in: .whitespaces), forKey: AppStorageKey.userEmail)
-        UserDefaults.standard.set(true, forKey: AppStorageKey.hasOnboarded)
-    }
-
     private func accept() async {
         working = true
         defer { working = false }
@@ -106,7 +100,16 @@ struct AcceptInviteView: View {
             try await api.acceptInvite(token: token, categories: selectedCategories, accessLevel: accessLevel)
             done = true
         } catch {
-            self.error = "Couldn't accept the invite. It may have already been used."
+            // 403 → the signed-in identity doesn't match who was invited; 410 → expired; 404 → used.
+            if case let AppError.server(status, _) = error {
+                switch status {
+                case 403: self.error = "This invite was sent to a different account. Sign in as the invited person to accept."
+                case 410: self.error = "This invite has expired. Ask whoever invited you to send a new one."
+                default: self.error = "Couldn't accept the invite. It may have already been used."
+                }
+            } else {
+                self.error = "Couldn't accept the invite. Please try again."
+            }
         }
     }
 }

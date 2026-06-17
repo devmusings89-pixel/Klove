@@ -19,6 +19,7 @@ struct BookAppointmentView: View {
     @State private var preferredTimes = ""
     @State private var booking = false
     @State private var outcome: BookingOutcome?
+    @State private var errorMessage: String?
     private let api = APIClient()
 
     init(memberId: String, memberName: String, allowMemberChange: Bool = false, onBooked: @escaping () -> Void = {}) {
@@ -35,6 +36,9 @@ struct BookAppointmentView: View {
             }
             .navigationTitle("Book a visit")
             .navigationBarTitleDisplayMode(.inline)
+            .alert("Couldn't book", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: { Text(errorMessage ?? "") }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button(outcome == nil ? "Cancel" : "Done") { dismiss() } }
                 if outcome == nil {
@@ -88,54 +92,64 @@ struct BookAppointmentView: View {
 
     @ViewBuilder
     private func confirmation(_ o: BookingOutcome) -> some View {
-        VStack(spacing: 14) {
-            if o.needsPayment {
-                Image(systemName: "creditcard.fill").font(.system(size: 52)).foregroundStyle(Theme.accent)
-                Text("Concierge fee").font(.title2.weight(.semibold)).foregroundStyle(Theme.ink)
-                Text("This booking has a \(Self.price(o.priceCents)) concierge fee. Payment is required before Klove contacts the office.")
-                    .font(.subheadline).foregroundStyle(Theme.inkSecondary).multilineTextAlignment(.center).padding(.horizontal, 8)
-                Text("(Set up Stripe to enable in-app payment.)").font(.caption).foregroundStyle(Theme.inkSecondary)
-            } else {
-                Image(systemName: o.isConfirmed ? "checkmark.seal.fill" : "phone.arrow.up.right.fill")
-                    .font(.system(size: 52)).foregroundStyle(o.isConfirmed ? Theme.handled : Theme.accent)
-                Text(o.isConfirmed ? "Done — it's booked" : "Klove is on it")
-                    .font(.title2.weight(.semibold)).foregroundStyle(Theme.ink)
+        ScrollView {
+            VStack(spacing: 14) {
+                Image(systemName: confIcon(o)).font(.system(size: 52)).foregroundStyle(confTint(o))
+                Text(confTitle(o)).font(.title2.weight(.semibold)).foregroundStyle(Theme.ink)
                 Text("\(o.title)\(o.provider.map { " with \($0)" } ?? "")")
                     .font(.subheadline).foregroundStyle(Theme.ink).multilineTextAlignment(.center)
-                if o.isConfirmed {
+
+                if o.isProvisional {
+                    Text("Klove placed a provisional hold\(o.startsAt != nil ? " for \(o.whenDisplay)" : ""). It isn't confirmed with the office yet — Klove will confirm and update you in Today.")
+                        .font(.caption).foregroundStyle(Theme.inkSecondary).multilineTextAlignment(.center).padding(.top, 4)
+                } else if o.isConfirmed {
                     Text("\(o.whenDisplay)\(o.confirmation.map { " · Confirmation \($0)" } ?? "")")
                         .font(.caption).foregroundStyle(Theme.inkSecondary)
                     Text("You'll find it in Today and on \(memberName)'s timeline.")
                         .font(.caption).foregroundStyle(Theme.inkSecondary).padding(.top, 4)
                 } else {
-                    Text("Klove is contacting the office now. You'll get a confirmation in Today & Actions when it's booked.")
+                    Text("Watch Klove reach the office below — you'll also find this in Today & Actions.")
                         .font(.caption).foregroundStyle(Theme.inkSecondary).multilineTextAlignment(.center).padding(.top, 4)
+                    if let sid = o.sessionId {
+                        SessionLiveCard(sessionId: sid).padding(.top, 8)
+                    }
                 }
             }
+            .padding(24)
+            .frame(maxWidth: .infinity)
         }
-        .padding(32)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background.ignoresSafeArea())
     }
 
-    private static func price(_ cents: Int?) -> String {
-        String(format: "$%.2f", Double(cents ?? 0) / 100)
+    private func confTitle(_ o: BookingOutcome) -> String {
+        if o.isProvisional { return "Provisional hold placed" }
+        return o.isConfirmed ? "Done — it's booked" : "Klove is on it"
+    }
+    private func confIcon(_ o: BookingOutcome) -> String {
+        if o.isProvisional { return "calendar.badge.clock" }
+        return o.isConfirmed ? "checkmark.seal.fill" : "phone.arrow.up.right.fill"
+    }
+    private func confTint(_ o: BookingOutcome) -> Color {
+        if o.isProvisional { return .orange }
+        return o.isConfirmed ? Theme.handled : Theme.accent
     }
 
     private func book() async {
         booking = true
         defer { booking = false }
-        outcome = try? await api.bookForMember(
-            memberId,
-            reason: reason.trimmingCharacters(in: .whitespaces),
-            provider: provider.isEmpty ? nil : provider,
-            preferredTimes: preferredTimes.isEmpty ? nil : preferredTimes,
-            phone: phone.isEmpty ? nil : phone,
-            website: website.isEmpty ? nil : website
-        )
-        if outcome != nil {
+        do {
+            outcome = try await api.bookForMember(
+                memberId,
+                reason: reason.trimmingCharacters(in: .whitespaces),
+                provider: provider.isEmpty ? nil : provider,
+                preferredTimes: preferredTimes.isEmpty ? nil : preferredTimes,
+                phone: phone.isEmpty ? nil : phone,
+                website: website.isEmpty ? nil : website
+            )
             store.bumpData()   // refresh Today/Actions so the booking shows up
             onBooked()
+        } catch {
+            errorMessage = (error as? AppError)?.errorDescription ?? error.localizedDescription
         }
     }
 }

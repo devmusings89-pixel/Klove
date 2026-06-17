@@ -12,6 +12,9 @@ final class SourcesModel {
     var sourceStates: [SourceType: SourceState] = [:]
     var connections: [SourceConnection] = []
 
+    /// Human-readable result of the most recent connect/scan (e.g. "Scanned 12 emails, 3 new records").
+    var lastScanMessage: String?
+
     /// When set, the view should open this OAuth URL (e.g. Gmail consent) and clear it afterward.
     var pendingAuthURL: URL?
     private var authInFlight: SourceType?
@@ -35,14 +38,33 @@ final class SourcesModel {
         if !provider.isEmpty { params["provider"] = provider }
         if !host.isEmpty { params["host"] = host }
         do {
-            _ = try await api.connectSource(.imap, params: params)
+            let resp = try await api.connectSource(.imap, params: params)
             sourceStates[.imap] = .connected
+            lastScanMessage = scanSummary(scanned: resp.scanned, queued: resp.queued)
             await loadSources()
             return true
         } catch {
             sourceStates[.imap] = .failed(friendly(error, for: .imap))
             return false
         }
+    }
+
+    /// Re-scan a connected source on demand (Settings "Scan now"). Updates `lastScanMessage`.
+    func scanNow(_ type: SourceType) async {
+        do {
+            let r = try await api.syncSource(type)
+            lastScanMessage = scanSummary(scanned: r.scanned, queued: r.queued)
+            await loadSources()
+        } catch {
+            lastScanMessage = friendly(error, for: type)
+        }
+    }
+
+    private func scanSummary(scanned: Int?, queued: Int?) -> String {
+        guard let scanned else { return "Connected — Klove will scan your mailbox shortly." }
+        if scanned == 0 { return "Connected — no new health mail found yet. Klove keeps checking." }
+        let q = queued ?? 0
+        return "Scanned \(scanned) message\(scanned == 1 ? "" : "s") — \(q) new record\(q == 1 ? "" : "s") found."
     }
 
     func loadSources() async {

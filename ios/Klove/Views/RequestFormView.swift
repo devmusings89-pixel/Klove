@@ -64,7 +64,7 @@ struct RequestFormView: View {
                 Button(action: { showConsent = true }) {
                     HStack {
                         Spacer()
-                        if model.isSubmitting { ProgressView() } else { Text("Continue — $5") .bold() }
+                        if model.isSubmitting { ProgressView() } else { Text("Continue — it's free").bold() }
                         Spacer()
                     }
                 }
@@ -113,13 +113,6 @@ struct RequestFormView: View {
 
     private func submit() async {
         guard let response = await model.submit() else { return }
-        switch await PaymentService.pay(for: response) {
-        case .completed:
-            router.push(.progress(sessionId: response.sessionId))
-        case .canceled:
-            model.errorMessage = "Payment canceled."
-        case .failed(let message):
-            model.errorMessage = message
-        }
+        router.push(.progress(sessionId: response.sessionId))
     }
 }

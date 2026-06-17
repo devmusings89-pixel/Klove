@@ -117,7 +117,12 @@ export function matchAnalyte(code: string | null | undefined, display: string): 
 /** Convert a value in `fromUnit` to the analyte's canonical unit, or undefined if not mappable. */
 export function toCanonical(analyte: Analyte, value: number, fromUnit?: string | null): number | undefined {
   const u = normUnit(fromUnit);
-  if (!u) return value; // unit absent — assume already canonical (best effort)
+  if (!u) {
+    // Unit absent. Safe to assume canonical only when the analyte is single-unit (no ambiguity).
+    // For multi-unit analytes (e.g. glucose mg/dL vs mmol/L) a missing unit is genuinely unknown —
+    // leave canonicalValue undefined rather than guessing, which could mis-scale by ~18x.
+    return Object.keys(analyte.units).length <= 1 ? value : undefined;
+  }
   if (u === normUnit(analyte.unit)) return value;
   const factor = analyte.units[u];
   return factor !== undefined ? value * factor : undefined;

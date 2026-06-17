@@ -29,10 +29,14 @@ export async function registerDeviceToken(userId: string, token: string): Promis
   await prisma.user.update({ where: { id: userId }, data: { apnsToken: token } });
 }
 
-/** Best-effort push to a specific user (used by reminders and concierge updates). */
-export async function sendPushToUser(userId: string, title: string, body: string): Promise<void> {
+/**
+ * Best-effort push to a specific user (used by reminders and concierge updates). `force` bypasses
+ * the general push preference for safety-critical alerts (e.g. a missed critical-medication dose).
+ */
+export async function sendPushToUser(userId: string, title: string, body: string, force = false): Promise<void> {
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { apnsToken: true, pushEnabled: true } });
-  if (!user?.apnsToken || user.pushEnabled === false) return; // respect the notification preference
+  if (!user?.apnsToken) return;
+  if (user.pushEnabled === false && !force) return; // respect the preference unless it's safety-critical
   await sendApns(user.apnsToken, title, body);
 }
 

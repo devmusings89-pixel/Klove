@@ -6,7 +6,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { runTool, llmAvailable } from "./llm-tool.js";
 import { prisma } from "../db.js";
-import { toJson } from "./json.js";
+import { toJson, fromJson } from "./json.js";
 import type { DraftAlert } from "./insights-types.js";
 import { evaluateGuidelines } from "./guidelines.js";
 import { detectMedIssues } from "./med-safety.js";
@@ -110,13 +110,24 @@ export async function runAnalysis(userId: string, generatedByJobId?: string): Pr
   // user somehow isn't in a household yet (pre-backfill).
   const membership = await prisma.householdMembership.findFirst({ where: { userId }, select: { householdId: true } });
 
-  // Persist, skipping titles that already have an unacknowledged alert (idempotent re-runs).
-  const existing = await prisma.healthAlert.findMany({ where: { userId, acknowledgedAt: null }, select: { title: true } });
-  const seen = new Set(existing.map((a) => a.title));
+  // Dedup key: an alert is "the same" only if its title AND the set of records it points at match.
+  // Keying on title alone would let an open alert swallow a genuinely new/worsening finding (e.g. a
+  // second abnormal result for the same analyte, with a different observation id). Including the
+  // related resource ids (sorted, stable) distinguishes those.
+  const keyOf = (title: string, ids: string[] | undefined): string =>
+    `${title}::${[...(ids ?? [])].sort().join(",")}`;
+
+  // Persist, skipping (title+resources) that already have an unacknowledged alert (idempotent re-runs).
+  const existing = await prisma.healthAlert.findMany({
+    where: { userId, acknowledgedAt: null },
+    select: { title: true, relatedResourceIds: true },
+  });
+  const seen = new Set(existing.map((a) => keyOf(a.title, fromJson<string[]>(a.relatedResourceIds, []))));
   let created = 0;
   for (const d of drafts) {
-    if (seen.has(d.title)) continue;
-    seen.add(d.title);
+    const k = keyOf(d.title, d.relatedResourceIds);
+    if (seen.has(k)) continue;
+    seen.add(k);
     const alert = await prisma.healthAlert.create({
       data: {
         userId,

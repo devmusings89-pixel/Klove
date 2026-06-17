@@ -118,6 +118,18 @@ export async function taskRoutes(app: FastifyInstance) {
       where: { id: task.id },
       data: { state: "waiting", conciergeJobId: session.id },
     });
+    // Make the handoff tangible: a confirmation lands in the inbox so the user knows a person has it.
+    await prisma.message.create({
+      data: {
+        householdId: task.householdId,
+        subjectUserId: task.subjectUserId,
+        direction: "out",
+        channel: "inapp",
+        title: "Handed to a specialist",
+        body: `A Klove specialist is taking over "${task.title}" and will update you here.`,
+        relatedTaskId: task.id,
+      },
+    });
     return { ...updated, conciergeJobId: session.id };
   });
 }

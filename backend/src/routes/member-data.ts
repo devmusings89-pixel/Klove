@@ -10,6 +10,7 @@ import { gmailSource } from "../sources/gmail.js";
 import { ingestArtifact } from "../services/ingestion.js";
 import { runExtractionTick } from "../services/health-worker.js";
 import { buildTimeline, buildSummary } from "../services/graph.js";
+import { ALLOWED_UPLOAD_MIMES, MAX_UPLOAD_BYTES } from "./uploads.js";
 import type { SourceType } from "../sources/types.js";
 
 // A representative health email for the mock scan (live mode pulls real mail via Gmail). Kept to a
@@ -112,6 +113,8 @@ export async function memberDataRoutes(app: FastifyInstance) {
         case "medication": ({ count } = await prisma.medicationStatement.deleteMany({ where })); break;
         case "allergy": ({ count } = await prisma.allergyIntolerance.deleteMany({ where })); break;
         case "appointment": ({ count } = await prisma.appointment.deleteMany({ where })); break;
+        case "report": ({ count } = await prisma.diagnosticReport.deleteMany({ where })); break;
+        case "vital": ({ count } = await prisma.vitalSign.deleteMany({ where })); break;
         default: return reply.code(400).send({ error: "unsupported_kind" });
       }
       if (count === 0) return reply.code(404).send({ error: "not_found" });
@@ -221,8 +224,16 @@ export async function memberDataRoutes(app: FastifyInstance) {
       );
       if (r.status === "queued") queued++;
     }
-    // Drain extraction + chained analysis so records show immediately.
-    for (let i = 0; i < 6; i++) await runExtractionTick();
+    // Drain extraction + chained analysis so records show immediately. Loop until the queue is
+    // actually empty (each tick can chain a follow-up job, e.g. extract → fhir_normalize →
+    // analysis) rather than a fixed tick count that could leave jobs pending. Capped to avoid an
+    // unbounded loop if a job keeps re-queuing.
+    const MAX_DRAIN_TICKS = 50;
+    for (let i = 0; i < MAX_DRAIN_TICKS; i++) {
+      const pending = await prisma.extractionJob.count({ where: { status: "pending", runAfter: { lte: new Date() } } });
+      if (pending === 0) break;
+      await runExtractionTick();
+    }
     return reply.send({ mode: "mock", scanned: SAMPLE_EMAILS.length, queued });
   });
 
@@ -233,8 +244,11 @@ export async function memberDataRoutes(app: FastifyInstance) {
     if (!userId) return;
     const file = await req.file();
     if (!file) return reply.code(400).send({ error: "no_file" });
+    // Reject unsupported types before reading bytes (vision/OCR only handles images + PDF).
+    if (!ALLOWED_UPLOAD_MIMES.has(file.mimetype)) return reply.code(415).send({ error: "unsupported_media_type" });
     const bytes = await file.toBuffer();
     if (bytes.byteLength === 0) return reply.code(400).send({ error: "empty_file" });
+    if (bytes.byteLength > MAX_UPLOAD_BYTES) return reply.code(413).send({ error: "file_too_large" });
     const connectionId = await ensureUploadConnection(userId);
     const result = await ingestArtifact(
       userId,

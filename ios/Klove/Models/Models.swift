@@ -40,9 +40,6 @@ struct CreateSessionRequest: Codable {
 
 struct CreateSessionResponse: Codable {
     let sessionId: String
-    let clientSecret: String
-    let priceCents: Int
-    let mockPayment: Bool
 }
 
 // MARK: - Profile + insurance vault (/profile)
@@ -130,6 +127,20 @@ struct CallResult: Codable, Hashable {
     let recordingUrl: String?
     let endedReason: String?
     let durationSec: Int?
+    let createdAt: String?
+
+    /// "2:14 PM · 3m 20s" — when the call happened and how long it lasted, when known.
+    var whenDuration: String? {
+        var parts: [String] = []
+        if let s = createdAt, let d = ISO8601DateFormatter().date(from: s) {
+            let f = DateFormatter(); f.dateFormat = "MMM d, h:mm a"
+            parts.append("Called \(f.string(from: d))")
+        }
+        if let secs = durationSec, secs > 0 {
+            parts.append(secs >= 60 ? "\(secs / 60)m \(secs % 60)s" : "\(secs)s")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
 }
 
 struct CallTarget: Codable, Hashable, Identifiable {

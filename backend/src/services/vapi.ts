@@ -99,7 +99,14 @@ export function buildVariableValues(
     patientReason: p.reason,
     patientInsurance: p.insurance || "not provided",
     patientPreferredTimes: p.preferredTimes || "any available time",
-    acceptableWindow: p.acceptableWindow || "the patient's preferred times only",
+    // Never auto-book without an EXPLICIT acceptable window. If the patient gave one, use it; if they
+    // only gave preferred times, treat those as the window; otherwise instruct the assistant NOT to
+    // auto-book and to collect options instead (the operator chooses). An empty window must not be
+    // interpreted as "any slot is acceptable".
+    acceptableWindow:
+      p.acceptableWindow ||
+      p.preferredTimes ||
+      "NONE — do not auto-book any slot. Collect 2-3 available options and set outcome=options_collected so the patient can choose.",
     additionalInfo: p.additionalInfo || "none provided",
     transferNumber: toE164(p.patientPhone) || "",
     callMode: opts.mode,

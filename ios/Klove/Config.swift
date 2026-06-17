@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// App-wide configuration. Point `apiBaseURL` at your running backend
 /// (use your machine's LAN IP or an ngrok URL when testing on a device).
@@ -9,8 +10,77 @@ enum Config {
     /// When empty, the app falls back to the backend's mock-payment endpoint.
     static let stripePublishableKey = ""
 
-    /// Supabase project URL + anon (publishable) key for Sign in with Apple/Google → session exchange.
+    /// Supabase project URL + publishable key for email/password, Apple, and Google sign-in.
     /// When empty, sign-in still works as a stable Apple-derived identity (dev header), no JWT.
-    static let supabaseURL = "https://xgydnhqpsebszhpsbgaq.supabase.co"
-    static let supabaseAnonKey = "sb_publishable_DNABaw-IpsT8PMGFxTgLpA_Bu1QllqC"
+    ///
+    /// The `sb_publishable_…` key is the PUBLIC client key (Supabase's intended client credential,
+    /// guarded by Row-Level Security) — it is designed to ship in the app, so it's safe to keep here
+    /// as the default. The key that must NEVER be committed is the `service_role` secret, which the
+    /// client never uses. A deployment can still override these per-environment via the Info.plist
+    /// keys `SUPABASE_URL` / `SUPABASE_ANON_KEY` (e.g. from a gitignored xcconfig):
+    ///   <key>SUPABASE_URL</key><string>$(SUPABASE_URL)</string>
+    ///   <key>SUPABASE_ANON_KEY</key><string>$(SUPABASE_ANON_KEY)</string>
+    static var supabaseURL: String {
+        let override = infoPlistString("SUPABASE_URL")
+        return override.isEmpty ? defaultSupabaseURL : override
+    }
+    static var supabaseAnonKey: String {
+        let override = infoPlistString("SUPABASE_ANON_KEY")
+        return override.isEmpty ? defaultSupabaseAnonKey : override
+    }
+
+    private static let defaultSupabaseURL = "https://xgydnhqpsebszhpsbgaq.supabase.co"
+    private static let defaultSupabaseAnonKey = "sb_publishable_DNABaw-IpsT8PMGFxTgLpA_Bu1QllqC"
+
+    /// Read a string from the app bundle's Info.plist, trimming whitespace. Returns "" if absent.
+    private static func infoPlistString(_ key: String) -> String {
+        (Bundle.main.object(forInfoDictionaryKey: key) as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+}
+
+/// Minimal Keychain wrapper for storing sensitive secrets (auth JWTs) outside UserDefaults.
+/// Items are stored with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` so they never sync to
+/// iCloud Keychain or other devices and are only readable while the device is unlocked.
+enum KeychainStore {
+    private static let service = "app.klove.client"
+
+    static func set(_ value: String, for key: String) {
+        let data = Data(value.utf8)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+        ]
+        // Replace any existing item: delete then add (simplest correct upsert).
+        SecItemDelete(query as CFDictionary)
+        var attrs = query
+        attrs[kSecValueData as String] = data
+        attrs[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        SecItemAdd(attrs as CFDictionary, nil)
+    }
+
+    static func get(_ key: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data,
+              let value = String(data: data, encoding: .utf8) else { return nil }
+        return value
+    }
+
+    static func remove(_ key: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
 }

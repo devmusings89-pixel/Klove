@@ -12,10 +12,22 @@ final class AuthService: NSObject {
 
     var errorMessage: String?
     private var currentNonce: String?
+    /// One-time CSRF nonce for the Google OAuth web flow; verified against the callback's `state`.
+    private var oauthState: String?
+
+    /// True when the app is configured to obtain real JWTs (Supabase live). In that case a leftover
+    /// `userEmail` alone must NOT count as signed in — only a stored bearer token does. In a pure
+    /// mock build (no Supabase) the dev email identity is still accepted.
+    private var requiresRealToken: Bool { !Config.supabaseURL.isEmpty && !Config.supabaseAnonKey.isEmpty }
+
+    /// The stored auth JWT (Keychain-backed), or nil.
+    private var authToken: String? { KeychainStore.get(AppStorageKey.authToken) }
 
     var isSignedIn: Bool {
-        UserDefaults.standard.string(forKey: AppStorageKey.authToken) != nil
-            || !(UserDefaults.standard.string(forKey: AppStorageKey.userEmail) ?? "").isEmpty
+        if authToken != nil { return true }
+        // No token: only the mock/dev build may treat a saved email as signed in.
+        if requiresRealToken { return false }
+        return !(UserDefaults.standard.string(forKey: AppStorageKey.userEmail) ?? "").isEmpty
     }
 
     var email: String { UserDefaults.standard.string(forKey: AppStorageKey.userEmail) ?? "" }
@@ -41,12 +53,20 @@ final class AuthService: NSObject {
             if let e = cred.email { UserDefaults.standard.set(e, forKey: cacheKey) }
             let email = UserDefaults.standard.string(forKey: cacheKey) ?? "\(cred.user.prefix(12))@appleid.klove"
             UserDefaults.standard.set(email, forKey: AppStorageKey.userEmail)
-            UserDefaults.standard.set(true, forKey: AppStorageKey.hasOnboarded)
             errorMessage = nil
 
-            if let data = cred.identityToken, let idToken = String(data: data, encoding: .utf8),
-               !Config.supabaseURL.isEmpty, !Config.supabaseAnonKey.isEmpty {
+            if requiresRealToken {
+                // Live build: the user is only signed in once we obtain a Supabase JWT. Defer
+                // hasOnboarded until the exchange succeeds; surface failures instead of silently
+                // leaving a half-authenticated state.
+                guard let data = cred.identityToken, let idToken = String(data: data, encoding: .utf8) else {
+                    errorMessage = "Couldn't sign you in. Please try again."
+                    return
+                }
                 Task { await exchangeWithSupabase(idToken: idToken) }
+            } else {
+                // Mock/dev build: the Apple-derived email identity is enough.
+                UserDefaults.standard.set(true, forKey: AppStorageKey.hasOnboarded)
             }
         }
     }
@@ -59,18 +79,34 @@ final class AuthService: NSObject {
             errorMessage = "Google sign-in needs Supabase configured (set Config.supabaseURL)."
             return
         }
+        // CSRF protection: send a random `state` and require the callback to echo it back. Without
+        // this an attacker could feed us an access_token from a session they control.
+        let state = Self.randomNonce()
+        oauthState = state
         let redirect = "klove://auth-callback"
         guard let encoded = redirect.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let url = URL(string: "\(Config.supabaseURL)/auth/v1/authorize?provider=google&redirect_to=\(encoded)") else { return }
+              let encodedState = state.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "\(Config.supabaseURL)/auth/v1/authorize?provider=google&redirect_to=\(encoded)&state=\(encodedState)") else { return }
 
         let coordinator = WebAuthCoordinator()
         webAuth = coordinator
-        guard let callback = await coordinator.authenticate(url: url, callbackScheme: "klove"),
-              let token = Self.fragmentParam(callback, "access_token") else {
-            errorMessage = nil // user cancelled or no token
+        guard let callback = await coordinator.authenticate(url: url, callbackScheme: "klove") else {
+            errorMessage = nil // user cancelled
             return
         }
-        UserDefaults.standard.set(token, forKey: AppStorageKey.authToken)
+        // Verify the returned state matches what we sent (it comes back in the fragment).
+        let returnedState = Self.fragmentParam(callback, "state")
+        guard let expected = oauthState, returnedState == expected else {
+            oauthState = nil
+            errorMessage = "Sign-in could not be verified. Please try again."
+            return
+        }
+        oauthState = nil
+        guard let token = Self.fragmentParam(callback, "access_token") else {
+            errorMessage = nil // no token returned
+            return
+        }
+        KeychainStore.set(token, for: AppStorageKey.authToken)
         UserDefaults.standard.set(Self.emailFromJWT(token) ?? "you@gmail.com", forKey: AppStorageKey.userEmail)
         UserDefaults.standard.set(true, forKey: AppStorageKey.hasOnboarded)
         errorMessage = nil
@@ -107,12 +143,13 @@ final class AuthService: NSObject {
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 500
         guard status < 300 else {
-            errorMessage = (json?["msg"] ?? json?["error_description"] ?? json?["error"]) as? String
-                ?? (isSignup ? "Couldn't create the account." : "Wrong email or password.")
+            // Don't surface raw Supabase/GoTrue error strings (they can leak internals); map to copy.
+            let raw = (json?["msg"] ?? json?["error_description"] ?? json?["error"]) as? String
+            errorMessage = Self.friendlyAuthError(raw, status: status, isSignup: isSignup)
             return false
         }
         if let token = json?["access_token"] as? String {
-            UserDefaults.standard.set(token, forKey: AppStorageKey.authToken)
+            KeychainStore.set(token, for: AppStorageKey.authToken)
             UserDefaults.standard.set(Self.emailFromJWT(token) ?? email, forKey: AppStorageKey.userEmail)
             UserDefaults.standard.set(true, forKey: AppStorageKey.hasOnboarded)
             errorMessage = nil
@@ -124,14 +161,42 @@ final class AuthService: NSObject {
     }
 
     func signOut() {
-        UserDefaults.standard.removeObject(forKey: AppStorageKey.authToken)
+        // Best-effort: revoke the Supabase session server-side so the JWT can't be reused.
+        if let token = authToken, !Config.supabaseURL.isEmpty {
+            Task { await revokeSupabaseSession(token) }
+        }
+        KeychainStore.remove(AppStorageKey.authToken)
         UserDefaults.standard.removeObject(forKey: AppStorageKey.userEmail)
         UserDefaults.standard.set(false, forKey: AppStorageKey.hasOnboarded)
+        currentNonce = nil
+        oauthState = nil
+        // Drop any per-user cached state so the next account starts clean.
+        clearUserCaches()
     }
 
-    /// Exchange the Apple identity token for a Supabase session (live JWT path). Best-effort.
+    /// POST /auth/v1/logout to invalidate the refresh/session server-side. Best-effort.
+    private func revokeSupabaseSession(_ token: String) async {
+        guard let url = URL(string: "\(Config.supabaseURL)/auth/v1/logout") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        _ = try? await URLSession.shared.data(for: req)
+    }
+
+    /// Clear caches that are scoped to the signed-in user. Cached Apple email entries (keyed by the
+    /// Apple user id) are intentionally retained so re-sign-in keeps the same email.
+    private func clearUserCaches() {
+        URLCache.shared.removeAllCachedResponses()
+    }
+
+    /// Exchange the Apple identity token for a Supabase session (live JWT path). On success stores
+    /// the JWT and completes onboarding; on failure surfaces an error and does NOT sign the user in.
     private func exchangeWithSupabase(idToken: String) async {
-        guard let url = URL(string: "\(Config.supabaseURL)/auth/v1/token?grant_type=id_token") else { return }
+        guard let url = URL(string: "\(Config.supabaseURL)/auth/v1/token?grant_type=id_token") else {
+            errorMessage = "Couldn't sign you in. Please try again."
+            return
+        }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -142,8 +207,29 @@ final class AuthService: NSObject {
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
               (resp as? HTTPURLResponse)?.statusCode == 200,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let token = json["access_token"] as? String else { return }
-        UserDefaults.standard.set(token, forKey: AppStorageKey.authToken)
+              let token = json["access_token"] as? String else {
+            // No JWT → not signed in. Surface a generic error rather than leaving a half state.
+            errorMessage = "Couldn't sign you in. Please try again."
+            return
+        }
+        KeychainStore.set(token, for: AppStorageKey.authToken)
+        UserDefaults.standard.set(true, forKey: AppStorageKey.hasOnboarded)
+        errorMessage = nil
+    }
+
+    /// Map raw Supabase/GoTrue error strings to safe, user-facing copy.
+    private static func friendlyAuthError(_ raw: String?, status: Int, isSignup: Bool) -> String {
+        let lower = (raw ?? "").lowercased()
+        if lower.contains("already registered") || lower.contains("already been registered") || status == 422 {
+            return "That email is already registered. Try signing in instead."
+        }
+        if lower.contains("invalid login") || lower.contains("invalid") || status == 400 || status == 401 {
+            return isSignup ? "Couldn't create the account. Check your details and try again." : "Wrong email or password."
+        }
+        if lower.contains("rate") || status == 429 {
+            return "Too many attempts. Please wait a moment and try again."
+        }
+        return isSignup ? "Couldn't create the account." : "Wrong email or password."
     }
 
     // MARK: - Nonce helpers (standard Sign in with Apple + Supabase flow)

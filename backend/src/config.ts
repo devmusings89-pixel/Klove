@@ -8,13 +8,27 @@ function num(name: string, fallback: number): number {
   return n;
 }
 
+function list(name: string): string[] {
+  return (process.env[name] ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** True in production deployments. Auth/webhooks fail closed (no header-trust, no missing secrets) here. */
+export const isProduction = (process.env.NODE_ENV ?? "development") === "production";
+
 export const config = {
+  isProduction,
   port: num("PORT", 8080),
   publicBaseUrl: process.env.PUBLIC_BASE_URL ?? "http://localhost:8080",
 
-  sessionPriceCents: num("SESSION_PRICE_CENTS", 500),
-  // Concierge booking fee. 0 = free (operator-authorized, the default). When > 0 AND Stripe is
-  // configured, /members/:id/book requires payment before Klove contacts the office.
+  // CORS allowlist (comma-separated origins). Empty in dev = reflect any origin; required in prod.
+  corsOrigins: list("CORS_ORIGINS"),
+
+  // Booking is free. These remain configurable (default 0 = no charge) only so a future paid tier
+  // could be reintroduced via env; nothing gates on them at 0.
+  sessionPriceCents: num("SESSION_PRICE_CENTS", 0),
   conciergePriceCents: num("CONCIERGE_PRICE_CENTS", 0),
   maxCallsPerSession: num("MAX_CALLS_PER_SESSION", 3),
   minutesCapPerSession: num("MINUTES_CAP_PER_SESSION", 60),
@@ -72,6 +86,10 @@ export const config = {
     serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
     jwtSecret: process.env.SUPABASE_JWT_SECRET ?? "", // verify client JWTs
     storageBucket: process.env.SUPABASE_STORAGE_BUCKET ?? "health-documents",
+    // Expected JWT claims for issuer/audience validation. Supabase mints tokens with
+    // iss = "<project-url>/auth/v1" and aud = "authenticated". Overridable via env.
+    jwtIssuer: process.env.SUPABASE_JWT_ISSUER ?? (process.env.SUPABASE_URL ? `${process.env.SUPABASE_URL}/auth/v1` : ""),
+    jwtAudience: process.env.SUPABASE_JWT_AUDIENCE ?? "authenticated",
   },
 
   // Gmail / Google OAuth for the email source.

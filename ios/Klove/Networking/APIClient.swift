@@ -88,6 +88,11 @@ struct APIClient {
         try await post("/sources/\(type.rawValue)/connect", body: params)
     }
 
+    /// Scan a connected source on demand. Returns how many items it pulled and queued.
+    func syncSource(_ type: SourceType) async throws -> SyncResponse {
+        try await post("/sources/\(type.rawValue)/sync", body: EmptyBody())
+    }
+
     /// Revoke a connected source.
     func disconnectSource(_ type: SourceType) async throws {
         let _: EmptyResponse = try await post("/sources/\(type.rawValue)/disconnect", body: EmptyBody())
@@ -146,7 +151,8 @@ struct APIClient {
     // MARK: - Transport
 
     /// Bearer token (Supabase JWT) when signed in; preferred over the dev email header.
-    private var authToken: String { UserDefaults.standard.string(forKey: AppStorageKey.authToken) ?? "" }
+    /// Stored in the Keychain (not UserDefaults) so the JWT is encrypted at rest.
+    private var authToken: String { KeychainStore.get(AppStorageKey.authToken) ?? "" }
     /// Fallback identity: backend resolves the user from this header when there's no bearer token.
     private var userEmail: String { UserDefaults.standard.string(forKey: AppStorageKey.userEmail) ?? "" }
 

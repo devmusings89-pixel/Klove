@@ -36,7 +36,7 @@ struct UpcomingAppt: Decodable, Identifiable, Hashable {
 
     var whenDisplay: String {
         guard let s = startsAt, let d = ISO8601DateFormatter().date(from: s) else { return "Time TBD" }
-        let f = DateFormatter(); f.dateFormat = "EEE, MMM d 'at' h:mm a"
+        let f = DateFormatter(); f.dateFormat = "EEE, MMM d 'at' h:mm a zzz"
         return f.string(from: d)
     }
 }

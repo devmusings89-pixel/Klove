@@ -5,6 +5,7 @@
 // focused "show me" views. Everything here is a projection computed on demand (the anti-dashboard).
 
 import { prisma } from "../db.js";
+import { ANALYTES } from "./analyte-registry.js";
 
 export type TimelineKind = "observation" | "condition" | "medication" | "report" | "allergy" | "appointment";
 
@@ -112,26 +113,52 @@ export interface Series {
   points: { date: string; value: number }[];
 }
 
+/** Resolve a free-text "show me" query to the analytes whose name/aliases it mentions. */
+function analytesForQuery(query: string): { ids: Set<string>; terms: string[] } {
+  const q = query.toLowerCase();
+  const terms = q.split(/\s+/).filter((t) => t.length > 2);
+  const ids = new Set<string>();
+  for (const a of ANALYTES) {
+    // Match on the canonical display words or the alias regex (e.g. "a1c", "blood pressure").
+    if (a.aliases.test(query) || a.display.toLowerCase().split(/\s+/).some((w) => w.length > 2 && q.includes(w))) {
+      ids.add(a.id);
+    }
+  }
+  return { ids, terms };
+}
+
 /** A numeric trend for a "show me" query (e.g. "blood pressure", "A1c") — drives a chart. */
 export async function buildSeries(userId: string, query: string): Promise<Series | null> {
-  const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 2);
+  const { ids, terms } = analytesForQuery(query);
   if (!terms.length) return null;
   const obs = await prisma.observation.findMany({
     where: { userId, valueNum: { not: null } },
     orderBy: [{ effectiveAt: "asc" }, { recordedAt: "asc" }],
   });
-  const matches = obs.filter((o) => terms.some((t) => o.display.toLowerCase().includes(t)));
+  // Prefer matching on canonical analyteId (stable across labs/units); fall back to a display
+  // substring only for observations we never canonicalized (no analyteId).
+  const matches = obs.filter((o) =>
+    o.analyteId ? ids.has(o.analyteId) : terms.some((t) => o.display.toLowerCase().includes(t)),
+  );
   if (matches.length < 2) return null;
-  // Pick the single most-frequent measurement among the matches so the chart is one clean line.
+  // Pick the single most-frequent analyte (or display, for un-canonicalized rows) so the chart is
+  // one clean line.
+  const keyOf = (o: (typeof matches)[number]) => o.analyteId ?? o.display;
   const counts = new Map<string, number>();
-  for (const o of matches) counts.set(o.display, (counts.get(o.display) ?? 0) + 1);
-  const display = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
-  const series = matches.filter((o) => o.display === display);
+  for (const o of matches) counts.set(keyOf(o), (counts.get(keyOf(o)) ?? 0) + 1);
+  const key = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  const series = matches.filter((o) => keyOf(o) === key);
   if (series.length < 2) return null;
+  // Plot on a single consistent scale: use canonicalValue/canonicalUnit when available so a series
+  // that mixes source units (e.g. mmol/L and mg/dL) renders one coherent line.
+  const useCanonical = series.every((o) => o.canonicalValue != null);
   return {
-    display,
-    unit: series[0].unit,
-    points: series.map((o) => ({ date: (o.effectiveAt ?? o.recordedAt).toISOString(), value: o.valueNum! })),
+    display: series[series.length - 1].display,
+    unit: useCanonical ? series[0].canonicalUnit : series[0].unit,
+    points: series.map((o) => ({
+      date: (o.effectiveAt ?? o.recordedAt).toISOString(),
+      value: useCanonical ? o.canonicalValue! : o.valueNum!,
+    })),
   };
 }
 

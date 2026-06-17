@@ -49,6 +49,16 @@ test("simulated booking creates a confirmed appointment + handled task", async (
   assert.equal(task?.state, "handled");
 });
 
+test("booking is free and a simulated hold is marked unverified (no payment gate)", async () => {
+  const op = await mkOperator("free");
+  const out = await bookAppointment(op.id, op.id, op.householdId, { reason: "Dental cleaning" });
+  // No payment_required status anywhere — the $5 gate is gone.
+  assert.equal(out.status, "confirmed");
+  // A simulated booking must be flagged unverified so the UI can label it a provisional hold.
+  assert.equal(out.verified, false);
+  assert.ok(out.sessionId, "exposes the session id for live progress");
+});
+
 test("auto-reminders generate for an upcoming appointment and fire into a message", async () => {
   const op = await mkOperator("rem");
   await prisma.appointment.create({

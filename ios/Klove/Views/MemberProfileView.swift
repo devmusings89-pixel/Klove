@@ -138,6 +138,12 @@ struct MemberProfileView: View {
             }
             Divider().padding(.leading, 52)
             NavigationLink {
+                MedicationsView(memberId: memberId, memberName: d.displayName ?? "this member")
+            } label: {
+                careRow(icon: "pills.fill", title: "Medications", subtitle: "Schedules, reminders & refills")
+            }
+            Divider().padding(.leading, 52)
+            NavigationLink {
                 AppointmentBriefView(memberId: memberId, memberName: d.displayName ?? "this member")
             } label: {
                 careRow(icon: "list.clipboard.fill", title: "Prepare for a visit", subtitle: "One-page brief + questions")

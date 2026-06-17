@@ -18,14 +18,25 @@ struct ObservationRecord: Codable, Hashable, Identifiable {
     let confidence: Double
     let reportId: String?
 
-    /// Human value, e.g. "142 mg/dL".
+    /// Human value, e.g. "142 mg/dL". Uses a NumberFormatter so we don't leak full float precision
+    /// (e.g. "129.7300000001") into the UI.
     var valueText: String {
         if let valueNum {
-            let n = valueNum == valueNum.rounded() ? String(Int(valueNum)) : String(valueNum)
+            let n = ObservationRecord.valueFormatter.string(from: NSNumber(value: valueNum)) ?? String(valueNum)
             return unit.map { "\(n) \($0)" } ?? n
         }
         return valueString ?? "—"
     }
+
+    /// Up to 2 significant decimals, integers render without a trailing ".0".
+    private static let valueFormatter: NumberFormatter = {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.usesGroupingSeparator = false
+        f.minimumFractionDigits = 0
+        f.maximumFractionDigits = 2
+        return f
+    }()
     var isAbnormal: Bool { (abnormalFlag ?? "").uppercased() != "" && (abnormalFlag ?? "").uppercased() != "N" }
 }
 
@@ -105,9 +116,15 @@ struct Appointment: Codable, Hashable, Identifiable {
     let notes: String?
     let confidence: Double
 
-    /// True when the appointment is in the future (or has no parsed date yet).
+    /// True when the appointment is in the future, or has no date yet (nil). A *present but
+    /// unparseable* `startsAt` is a data error, not a future appointment: log it and treat it as not
+    /// upcoming so a bad date doesn't masquerade as a valid future event.
     var isUpcoming: Bool {
-        guard let date = HealthFormat.parseDate(startsAt) else { return true }
+        guard let startsAt else { return true } // no date set yet
+        guard let date = HealthFormat.parseDate(startsAt) else {
+            assertionFailure("Appointment.startsAt failed to parse: \(startsAt)")
+            return false
+        }
         return date >= Date()
     }
 }

@@ -55,14 +55,15 @@ final class BookingAssistantModel {
         }
     }
 
-    /// Load distinct recent providers for "Book again" suggestions.
+    /// Load distinct recent providers for "Book again" suggestions. Dedupe on a CANONICAL provider
+    /// key (see `providerKey`) so "Dr. Lin" and "Dr Lin" collapse to one entry instead of fragmenting.
     func loadRecentProviders() async {
         guard recentProviders.isEmpty else { return }
         guard let appts = try? await api.getAppointments() else { return }
         var seen = Set<String>()
         recentProviders = appts
             .filter { ($0.provider?.isEmpty == false) }
-            .filter { seen.insert($0.provider!.lowercased()).inserted }
+            .filter { seen.insert(providerKey($0.provider!)).inserted }
             .prefix(4)
             .map { $0 }
     }
@@ -118,7 +119,8 @@ final class BookingAssistantModel {
         !resolvedOfficeName.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
-    /// Build the CreateSessionRequest from the draft + confirmed details, create + pay.
+    /// Build the CreateSessionRequest from the draft + confirmed details and start the booking.
+    /// Booking is free — there's no payment step; the session begins calling immediately.
     func book() async -> String? {
         guard let draft, canBook else { return nil }
         isBooking = true
@@ -145,14 +147,28 @@ final class BookingAssistantModel {
         let request = CreateSessionRequest(email: email, patientInfo: patient, targets: [target], stopWhenBooked: true)
         do {
             let response = try await api.createSession(request)
-            switch await PaymentService.pay(for: response) {
-            case .completed: return response.sessionId
-            case .canceled: errorMessage = "Payment canceled."; return nil
-            case .failed(let m): errorMessage = m; return nil
-            }
+            return response.sessionId
         } catch {
             errorMessage = (error as? AppError)?.errorDescription ?? error.localizedDescription
             return nil
         }
     }
+}
+
+/// Canonical key for a provider/office name so trivial spelling/punctuation differences collapse to
+/// one identity ("Dr. Lin" == "Dr Lin" == "DR. LIN"). Lowercased, common honorific prefixes dropped,
+/// punctuation stripped, and whitespace squashed. Used to dedupe the "Book again" provider list.
+func providerKey(_ raw: String) -> String {
+    var s = raw.lowercased()
+    // Strip punctuation (periods, commas) so "dr." == "dr".
+    s = s.replacingOccurrences(of: "[.,]", with: " ", options: .regularExpression)
+    // Collapse runs of whitespace.
+    s = s.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        .trimmingCharacters(in: .whitespaces)
+    // Drop a leading honorific so "dr lin" == "lin".
+    for prefix in ["dr ", "doctor ", "mr ", "mrs ", "ms "] where s.hasPrefix(prefix) {
+        s = String(s.dropFirst(prefix.count))
+        break
+    }
+    return s
 }

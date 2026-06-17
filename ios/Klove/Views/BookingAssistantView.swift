@@ -163,7 +163,7 @@ struct BookingAssistantView: View {
             } label: {
                 HStack {
                     Spacer()
-                    if model.isBooking { ProgressView() } else { Text("Confirm & book — $5").bold() }
+                    if model.isBooking { ProgressView() } else { Text("Confirm & book — it's free").bold() }
                     Spacer()
                 }
             }

@@ -32,10 +32,12 @@ struct TaskDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .kloveCard()
 
+                if let jobId = task.conciergeJobId { SessionLiveCard(sessionId: jobId) }
+
                 if task.isChooseTime, let slots = task.options, !slots.isEmpty, state == "needs_you" {
                     chooseTimes(slots)
                 } else if state == "needs_you" { actions }
-                else if state == "waiting" {
+                else if state == "waiting", task.conciergeJobId == nil {
                     Text("Klove is handling this — you'll hear back when there's an update.")
                         .font(.subheadline).foregroundStyle(Theme.inkSecondary).kloveCard()
                 }

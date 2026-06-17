@@ -15,6 +15,7 @@ function serializeResult(r: CallResult) {
     recordingUrl: r.recordingUrl,
     endedReason: r.endedReason,
     durationSec: r.durationSec,
+    createdAt: r.createdAt,
   };
 }
 

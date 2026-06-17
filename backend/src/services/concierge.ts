@@ -32,14 +32,18 @@ export interface BookingInput {
 }
 
 export interface BookingOutcome {
-  status: "confirmed" | "in_progress" | "payment_required";
+  status: "confirmed" | "in_progress";
   taskId: string;
   title: string;
   provider: string | null;
   appointmentId?: string;
   confirmation?: string;
   startsAt?: string;
-  priceCents?: number;
+  // The booking session, so the client can show live progress + the transcript right away.
+  sessionId?: string;
+  // false = a provisional hold Klove placed without a live call (no contact info / LIVE_BOOKING off).
+  // The UI must not present a provisional hold as a verified, office-confirmed appointment.
+  verified: boolean;
 }
 
 function confirmationCode(): string {
@@ -57,19 +61,7 @@ export async function bookAppointment(
   householdId: string,
   input: BookingInput,
 ): Promise<BookingOutcome> {
-  // Payment gate: when a concierge fee is configured and Stripe is live, require payment before we
-  // contact the office. Default (price 0) is operator-authorized + free. The PaymentSheet + confirm
-  // loop is the remaining live step (needs a Stripe key + a set price).
-  if (config.conciergePriceCents > 0 && enabled.stripe()) {
-    return {
-      status: "payment_required",
-      taskId: "",
-      title: input.reason.trim() || "Appointment",
-      provider: input.provider?.trim() || null,
-      priceCents: config.conciergePriceCents,
-    };
-  }
-
+  // Booking is free and operator-authorized — Klove contacts the office right away.
   const hasContact = Boolean(input.phone || input.website || input.email);
   // With Google Places + a provider name, the orchestrator can look up the office itself — so an
   // office name alone is enough to book live.
@@ -138,7 +130,7 @@ async function liveBooking(subjectUserId: string, householdId: string, input: Bo
   });
 
   void placeNextCall(session.id); // fire-and-forget; reconcileConciergeJobs finalizes it
-  return { status: "in_progress", taskId: task.id, title: reason, provider };
+  return { status: "in_progress", taskId: task.id, title: reason, provider, sessionId: session.id, verified: true };
 }
 
 /** Deterministically confirm a booking and surface it across Klove's objects. */
@@ -147,8 +139,8 @@ async function simulatedBooking(subjectUserId: string, householdId: string, inpu
   const provider = input.provider?.trim() || null;
   const startsAt = input.preferredDate ? new Date(input.preferredDate) : new Date(Date.now() + 7 * 86_400_000);
   if (Number.isNaN(startsAt.getTime())) startsAt.setTime(Date.now() + 7 * 86_400_000);
-  const confirmation = confirmationCode();
 
+  const providerLabel = provider ? ` with ${provider}` : "";
   const session = await prisma.session.create({
     data: {
       userId: subjectUserId,
@@ -162,22 +154,25 @@ async function simulatedBooking(subjectUserId: string, householdId: string, inpu
           phoneNumber: input.phone ?? null,
           website: input.website ?? null,
           order: 0,
-          status: "booked",
+          // `requested`, not `booked` — no live call was placed, so this is a provisional hold.
+          status: "requested",
           channel: "messaging",
           chosenSlot: startsAt.toISOString(),
           results: {
             create: {
               phase: "book",
               channel: "messaging",
-              summary: `Booked ${reason}${provider ? ` with ${provider}` : ""}.`,
+              summary: `Provisional hold for ${reason}${providerLabel} around ${whenLabel(startsAt)}. No live call was placed — confirm with the office to lock it in.`,
               structuredData: toJson({
-                outcome: "booked",
-                appointmentBooked: true,
+                // `simulated` outcome tells the client to label this a provisional hold, not a
+                // verified, office-confirmed appointment — and not to show a real-looking code.
+                outcome: "simulated",
+                appointmentBooked: false,
                 appointmentDateTime: startsAt.toISOString(),
-                confirmation,
+                confirmation: "",
                 offeredSlots: [],
                 missingInfo: [],
-                notes: "Booked by Klove concierge (simulated).",
+                notes: "Provisional hold placed by Klove (no live call). Confirm with the office to verify.",
               }),
             },
           },
@@ -196,8 +191,8 @@ async function simulatedBooking(subjectUserId: string, householdId: string, inpu
       providerWebsite: input.website ?? null,
       startsAt,
       status: "scheduled",
-      confirmation,
-      notes: `Booked by Klove · job ${session.id}${input.preferredTimes ? ` · requested: ${input.preferredTimes}` : ""}`,
+      verified: false, // provisional hold — no live office confirmation
+      notes: `Provisional hold by Klove (not yet confirmed with the office) · job ${session.id}${input.preferredTimes ? ` · requested: ${input.preferredTimes}` : ""}`,
     },
   });
 
@@ -205,8 +200,8 @@ async function simulatedBooking(subjectUserId: string, householdId: string, inpu
     data: {
       subjectUserId,
       householdId,
-      title: `Booked: ${reason}`,
-      detail: `Confirmed for ${whenLabel(startsAt)}${provider ? ` with ${provider}` : ""} · ${confirmation}`,
+      title: `Hold: ${reason}`,
+      detail: `Provisional hold for ${whenLabel(startsAt)}${providerLabel} — not yet confirmed with the office.`,
       state: "handled",
       kind: "book",
       conciergeJobId: session.id,
@@ -218,8 +213,8 @@ async function simulatedBooking(subjectUserId: string, householdId: string, inpu
       subjectUserId,
       direction: "out",
       channel: "inapp",
-      title: "Booked",
-      body: `Done — ${reason} is booked for ${whenLabel(startsAt)}${provider ? ` with ${provider}` : ""}. Confirmation ${confirmation}.`,
+      title: "Provisional hold",
+      body: `Klove placed a provisional hold for ${reason}${providerLabel} around ${whenLabel(startsAt)}. It isn't confirmed with the office yet.`,
       relatedTaskId: task.id,
     },
   });
@@ -228,10 +223,11 @@ async function simulatedBooking(subjectUserId: string, householdId: string, inpu
     status: "confirmed",
     taskId: task.id,
     appointmentId: appointment.id,
-    confirmation,
     title: reason,
     provider,
     startsAt: startsAt.toISOString(),
+    sessionId: session.id,
+    verified: false,
   };
 }
 
@@ -254,6 +250,11 @@ export async function reconcileConciergeJobs(): Promise<void> {
 
     const booked = session.targets.find((t) => t.status === "booked");
     const choosing = session.targets.find((t) => t.status === "awaiting_choice");
+    // A live job can stall waiting on the operator: the office required info we didn't have, or an
+    // online scheduler sent a one-time code that must be entered. These aren't terminal, but the
+    // operator's task would otherwise sit silently in `waiting` — so we surface a needs_you prompt.
+    const awaitingVerification = session.targets.find((t) => t.status === "awaiting_verification");
+    const awaitingInfo = session.targets.find((t) => t.status === "awaiting_info");
     const terminal = session.status === "completed" || session.status === "failed";
     const reason = task.title.replace(/^Booking:\s*/, "");
 
@@ -316,6 +317,54 @@ export async function reconcileConciergeJobs(): Promise<void> {
         },
       });
       await pushToOperator(task.householdId, "Choose a time", `${choosing.officeName} offered ${slots.length} alternate times for ${reason} — tap to pick.`);
+    } else if (awaitingVerification) {
+      // An online scheduler sent a one-time code; the operator must enter it to finish booking.
+      await prisma.task.update({
+        where: { id: task.id },
+        data: {
+          state: "needs_you",
+          kind: "verify_code",
+          title: `Enter code: ${reason}`,
+          detail: `${awaitingVerification.officeName} sent a one-time code${awaitingVerification.verificationContact ? ` to ${awaitingVerification.verificationContact}` : ""}. Tap to enter it so Klove can confirm.`,
+        },
+      });
+      await prisma.message.create({
+        data: {
+          householdId: task.householdId,
+          subjectUserId: task.subjectUserId,
+          direction: "out",
+          channel: "inapp",
+          title: "Verification needed",
+          body: `${awaitingVerification.officeName} sent a one-time code to finish booking ${reason}. Tap to enter it.`,
+          relatedTaskId: task.id,
+        },
+      });
+      await pushToOperator(task.householdId, "Verification needed", `Enter the code ${awaitingVerification.officeName} sent to finish booking ${reason}.`);
+    } else if (awaitingInfo) {
+      // The office required information we didn't have; the operator must supply it.
+      const missing = fromJson<string[]>(awaitingInfo.missingInfo, []);
+      const missingLabel = missing.length ? ` (${missing.join(", ")})` : "";
+      await prisma.task.update({
+        where: { id: task.id },
+        data: {
+          state: "needs_you",
+          kind: "provide_info",
+          title: `More info needed: ${reason}`,
+          detail: `${awaitingInfo.officeName} needs more details${missingLabel} before it can book. Tap to provide them.`,
+        },
+      });
+      await prisma.message.create({
+        data: {
+          householdId: task.householdId,
+          subjectUserId: task.subjectUserId,
+          direction: "out",
+          channel: "inapp",
+          title: "Info needed",
+          body: `${awaitingInfo.officeName} needs more details${missingLabel} to book ${reason}. Tap to provide them.`,
+          relatedTaskId: task.id,
+        },
+      });
+      await pushToOperator(task.householdId, "Info needed", `${awaitingInfo.officeName} needs more details to book ${reason} — tap to provide them.`);
     } else if (terminal) {
       // Job finished without a booking (no answer, needs info, etc.) — surface it back to the operator.
       await prisma.task.update({

@@ -38,6 +38,7 @@ model User {
   apnsToken         String? // device token for APNs push (Phase 2)
   pushEnabled       Boolean                @default(true) // notification preference
   reminderLeadHours Int                    @default(24) // how far before an appointment to remind
+  timezone          String? // IANA tz (e.g. "America/New_York") for dose scheduling; falls back to server tz
   createdAt         DateTime               @default(now())
   sessions          Session[]
   connections       DataSourceConnection[]
@@ -220,6 +221,9 @@ model MedicationSchedule {
   label         String // display name snapshot, e.g. "Metformin 500mg"
   times         String // JSON array of "HH:MM" 24h local times, e.g. ["08:00","18:00"]
   active        Boolean             @default(true)
+  // Critical meds (anticoagulant, insulin, anti-seizure, …) get a stronger missed-dose alert that
+  // bypasses the general push preference and raises a Today task.
+  critical      Boolean             @default(false)
   createdAt     DateTime            @default(now())
   doses         DoseLog[]
 
@@ -377,6 +381,9 @@ model Appointment {
   startsAt        DateTime?
   endsAt          DateTime?
   status          String    @default("scheduled") // scheduled | completed | cancelled
+  // false = a provisional hold Klove placed without a live office confirmation. The UI must label it
+  // as unconfirmed everywhere it surfaces (Today, lists, detail), not show it as a booked visit.
+  verified        Boolean   @default(true)
   confirmation    String?
   notes           String?
   recordedAt      DateTime  @default(now())

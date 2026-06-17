@@ -1,12 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../db.js";
-import { config, enabled } from "../config.js";
+import { config, enabled, isProduction } from "../config.js";
 import { constructWebhookEvent } from "../services/stripe.js";
 import { placeNextCall, recordCallResult } from "../services/orchestrator.js";
 import type { CallStructuredData } from "../types.js";
 import { gmailSource } from "../sources/gmail.js";
 import { aggregatorSource } from "../sources/aggregator.js";
 import { ingestArtifact } from "../services/ingestion.js";
+import { syncConnection } from "../services/health-worker.js";
 import { encryptToken } from "../services/crypto.js";
 import { exchangeCodeForTokens, getGmailProfile } from "../services/google.js";
 
@@ -39,8 +40,11 @@ export async function webhookRoutes(app: FastifyInstance) {
 
   // ---- Vapi ----
   app.post("/webhooks/vapi", async (req, reply) => {
-    // Optional shared-secret check.
-    if (config.vapi.webhookSecret) {
+    // In production the shared secret is mandatory — fail closed if it's unset (and the boot guard
+    // should already have refused to start). In dev it stays optional so the pipeline is exercisable.
+    if (!config.vapi.webhookSecret) {
+      if (isProduction) return reply.code(503).send({ error: "webhook_not_configured" });
+    } else {
       const secret = req.headers["x-vapi-secret"];
       if (secret !== config.vapi.webhookSecret) return reply.code(401).send({ error: "unauthorized" });
     }
@@ -102,11 +106,12 @@ export async function webhookRoutes(app: FastifyInstance) {
         tokenExpiresAt: new Date(Date.now() + tokens.expires_in * 1000),
         cursor: JSON.stringify({ historyId: profile.historyId }),
       };
-      if (pending) {
-        await prisma.dataSourceConnection.update({ where: { id: pending.id }, data });
-      } else {
-        await prisma.dataSourceConnection.create({ data: { userId, type: "gmail", ...data } });
-      }
+      const conn = pending
+        ? await prisma.dataSourceConnection.update({ where: { id: pending.id }, data })
+        : await prisma.dataSourceConnection.create({ data: { userId, type: "gmail", ...data } });
+      // Kick off the first scan now (don't block the redirect) so records start flowing right after
+      // consent instead of waiting for the next ingestion tick. The client re-syncs on return too.
+      void syncConnection(conn).catch((err) => app.log.error({ err }, "gmail post-oauth scan failed"));
       return reply.redirect("klove://gmail/connected");
     } catch (err) {
       app.log.error({ err }, "gmail oauth exchange failed");

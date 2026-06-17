@@ -54,9 +54,25 @@ final class OnboardingModel {
         if let prev = Step(rawValue: step.rawValue - 1) { step = prev }
     }
 
-    // MARK: - Identity (mock-mode; replaced by Sign in with Apple later)
+    // MARK: - Identity
+
+    /// True when the app is wired to real auth (Supabase). In that case the bare email-entry path is
+    /// not a valid identity — the user must authenticate (Apple/Google/email+password) to get a JWT.
+    private var requiresRealAuth: Bool { !Config.supabaseURL.isEmpty && !Config.supabaseAnonKey.isEmpty }
 
     private func saveIdentity() -> Bool {
+        // Live build: typing an email alone must not count as being signed in. Require a real token
+        // obtained via one of the auth flows (which store an authToken in the Keychain).
+        if requiresRealAuth {
+            guard AuthService.shared.isSignedIn else {
+                identifyError = "Please sign in with Apple, Google, or email and password to continue."
+                return false
+            }
+            identifyError = nil
+            return true
+        }
+
+        // Mock/dev build: a valid email is a sufficient stable identity (sent via x-user-email).
         let trimmed = email.trimmingCharacters(in: .whitespaces)
         guard trimmed.contains("@"), trimmed.contains(".") else {
             identifyError = "Enter a valid email."

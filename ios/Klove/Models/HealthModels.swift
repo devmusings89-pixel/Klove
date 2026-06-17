@@ -59,7 +59,16 @@ struct SourceConnection: Codable, Hashable, Identifiable {
 }
 
 /// Result of POST /sources/:type/connect — either a stored connection or an OAuth redirect.
+/// IMAP connects synchronously and reports its first scan (`scanned`/`queued`).
 struct ConnectResponse: Codable, Hashable {
     let connectionId: String?
     let redirectUrl: String?
+    let scanned: Int?
+    let queued: Int?
+}
+
+/// Result of POST /sources/:type/sync — an on-demand "scan now".
+struct SyncResponse: Codable, Hashable {
+    let scanned: Int
+    let queued: Int
 }
