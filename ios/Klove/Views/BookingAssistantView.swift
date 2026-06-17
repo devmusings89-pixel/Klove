@@ -158,6 +158,19 @@ struct BookingAssistantView: View {
             TextField("Phone (for callbacks)", text: $model.patientPhone)
                 .textContentType(.telephoneNumber).keyboardType(.phonePad)
 
+            Divider()
+            Text("Insurance (required)").font(.caption).foregroundStyle(.secondary)
+            TextField("Insurance carrier (e.g. Blue Cross)", text: $model.insuranceCarrier)
+                .textInputAutocapitalization(.words)
+            TextField("Member ID", text: $model.insuranceMemberId)
+                .autocorrectionDisabled()
+            TextField("Plan name (optional)", text: $model.insurancePlan)
+            if model.insuranceCarrier.trimmingCharacters(in: .whitespaces).isEmpty
+                || model.insuranceMemberId.trimmingCharacters(in: .whitespaces).isEmpty {
+                Text("Offices ask for insurance to book — please add your carrier and member ID.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+
             Button {
                 Task { if let sid = await model.book() { router.push(.progress(sessionId: sid)) } }
             } label: {

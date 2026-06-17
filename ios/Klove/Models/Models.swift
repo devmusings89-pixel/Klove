@@ -159,6 +159,31 @@ struct CallTarget: Codable, Hashable, Identifiable {
     let verificationContact: String?   // where the scheduler sent the one-time code
     let result: CallResult?     // latest call
     let results: [CallResult]   // full history (gather + callbacks)
+
+    enum CodingKeys: String, CodingKey {
+        case id, officeName, phoneNumber, timezone, order, status, channel, website
+        case offeredSlots, chosenSlot, missingInfo, verificationContact, result, results
+    }
+
+    // Defensive decoding: a single null/missing field must never blank out the whole call card.
+    // Scalars fall back to sensible defaults; arrays to empty.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        officeName = (try? c.decode(String.self, forKey: .officeName)) ?? "Office"
+        phoneNumber = try? c.decodeIfPresent(String.self, forKey: .phoneNumber)
+        timezone = try? c.decodeIfPresent(String.self, forKey: .timezone)
+        order = (try? c.decode(Int.self, forKey: .order)) ?? 0
+        status = (try? c.decode(String.self, forKey: .status)) ?? "pending"
+        channel = try? c.decodeIfPresent(String.self, forKey: .channel)
+        website = try? c.decodeIfPresent(String.self, forKey: .website)
+        offeredSlots = (try? c.decode([String].self, forKey: .offeredSlots)) ?? []
+        chosenSlot = try? c.decodeIfPresent(String.self, forKey: .chosenSlot)
+        missingInfo = (try? c.decode([String].self, forKey: .missingInfo)) ?? []
+        verificationContact = try? c.decodeIfPresent(String.self, forKey: .verificationContact)
+        result = try? c.decodeIfPresent(CallResult.self, forKey: .result)
+        results = (try? c.decode([CallResult].self, forKey: .results)) ?? []
+    }
 }
 
 /// One pickable option, flattened across offices (mirrors backend `aggregatedOptions`).
@@ -202,4 +227,24 @@ struct SessionState: Codable, Hashable, Identifiable {
     var needsChoice: Bool { status == "awaiting_choice" }
     var needsInfo: Bool { status == "awaiting_info" }
     var needsVerification: Bool { status == "awaiting_verification" }
+
+    enum CodingKeys: String, CodingKey {
+        case id, status, patientInfo, maxCalls, minutesCap, stopWhenBooked
+        case aggregatedOptions, infoRequests, verificationRequests, targets
+    }
+
+    // Defensive decoding so a missing/null field can't fail the whole "call status" load.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        status = (try? c.decode(String.self, forKey: .status)) ?? "scheduling"
+        patientInfo = try? c.decodeIfPresent(PatientInfo.self, forKey: .patientInfo)
+        maxCalls = (try? c.decode(Int.self, forKey: .maxCalls)) ?? 0
+        minutesCap = (try? c.decode(Int.self, forKey: .minutesCap)) ?? 0
+        stopWhenBooked = (try? c.decode(Bool.self, forKey: .stopWhenBooked)) ?? true
+        aggregatedOptions = (try? c.decode([AggregatedOption].self, forKey: .aggregatedOptions)) ?? []
+        infoRequests = (try? c.decode([InfoRequest].self, forKey: .infoRequests)) ?? []
+        verificationRequests = (try? c.decode([VerificationRequest].self, forKey: .verificationRequests)) ?? []
+        targets = (try? c.decode([CallTarget].self, forKey: .targets)) ?? []
+    }
 }

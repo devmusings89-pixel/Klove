@@ -25,6 +25,10 @@ final class BookingAssistantModel {
     var patientDob = ""
     var patientPhone = ""
     var email = UserDefaults.standard.string(forKey: AppStorageKey.userEmail) ?? ""
+    // Insurance is required to book — offices ask for it, and the agent must be able to provide it.
+    var insuranceCarrier = ""
+    var insuranceMemberId = ""
+    var insurancePlan = ""
     var isBooking = false
 
     private let api = APIClient()
@@ -35,9 +39,8 @@ final class BookingAssistantModel {
     /// Past providers the user can rebook in one tap (from extracted appointments).
     var recentProviders: [Appointment] = []
 
-    // Insurance pulled from the saved profile (auto-attached to the booking).
-    private var insuranceSummary = ""
-    private var insuranceDetail = ""
+    // Insurance group, prefilled from the profile; member ID + carrier are surfaced as required fields.
+    private var insuranceGroup = ""
 
     /// Prefill identity + insurance from the saved profile so the user re-enters nothing.
     func loadProfile() async {
@@ -47,11 +50,10 @@ final class BookingAssistantModel {
         if patientPhone.isEmpty, let ph = p.phone { patientPhone = ph }
         if let e = p.email, !e.isEmpty, email.isEmpty { email = e }
         if let i = p.insurance {
-            insuranceSummary = [i.carrier, i.planName].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " ")
-            var parts: [String] = []
-            if let m = i.memberId, !m.isEmpty { parts.append("Member ID: \(m)") }
-            if let g = i.groupId, !g.isEmpty { parts.append("Group: \(g)") }
-            insuranceDetail = parts.joined(separator: ", ")
+            if insuranceCarrier.isEmpty, let c = i.carrier { insuranceCarrier = c }
+            if insurancePlan.isEmpty, let pl = i.planName { insurancePlan = pl }
+            if insuranceMemberId.isEmpty, let m = i.memberId { insuranceMemberId = m }
+            if let g = i.groupId { insuranceGroup = g }
         }
     }
 
@@ -116,7 +118,10 @@ final class BookingAssistantModel {
         !patientName.trimmingCharacters(in: .whitespaces).isEmpty &&
         !patientDob.trimmingCharacters(in: .whitespaces).isEmpty &&
         email.contains("@") &&
-        !resolvedOfficeName.trimmingCharacters(in: .whitespaces).isEmpty
+        !resolvedOfficeName.trimmingCharacters(in: .whitespaces).isEmpty &&
+        // Insurance is required — the office needs it and the agent must be able to provide it.
+        !insuranceCarrier.trimmingCharacters(in: .whitespaces).isEmpty &&
+        !insuranceMemberId.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     /// Build the CreateSessionRequest from the draft + confirmed details and start the booking.
@@ -134,15 +139,25 @@ final class BookingAssistantModel {
             email: ""
         )
         var patient = PatientInfo()
-        patient.name = patientName
+        patient.name = patientName.trimmingCharacters(in: .whitespaces)
         patient.dob = patientDob
         patient.reason = draft.reason ?? draft.specialty ?? "appointment"
         patient.preferredTimes = draft.preferredTimes ?? ""
         patient.acceptableWindow = draft.acceptableWindow ?? draft.preferredTimes ?? ""
         patient.patientPhone = patientPhone
         patient.patientEmail = email
-        patient.insurance = insuranceSummary
-        patient.additionalInfo = insuranceDetail
+        patient.insurance = [insuranceCarrier, insurancePlan].map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " ")
+        var insBits = ["Insurance member ID: \(insuranceMemberId.trimmingCharacters(in: .whitespaces))"]
+        if !insuranceGroup.isEmpty { insBits.append("Group: \(insuranceGroup)") }
+        patient.additionalInfo = insBits.joined(separator: ", ")
+
+        // Persist insurance to the profile so it's prefilled next time.
+        var ins = InsuranceInfo()
+        ins.carrier = insuranceCarrier.trimmingCharacters(in: .whitespaces)
+        ins.planName = insurancePlan.trimmingCharacters(in: .whitespaces)
+        ins.memberId = insuranceMemberId.trimmingCharacters(in: .whitespaces)
+        if !insuranceGroup.isEmpty { ins.groupId = insuranceGroup }
+        _ = try? await api.putInsurance(ins)
 
         let request = CreateSessionRequest(email: email, patientInfo: patient, targets: [target], stopWhenBooked: true)
         do {

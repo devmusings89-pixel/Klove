@@ -18,6 +18,23 @@ struct SessionLiveCard: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(s.status == "failed" ? Theme.needsYou : Theme.ink)
 
+                // Unmistakable confirmation once an office actually booked it.
+                if let booked = bookedDetails(s) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("Appointment confirmed", systemImage: "checkmark.seal.fill")
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.handled)
+                        if !booked.when.isEmpty {
+                            Text(booked.when).font(.caption).foregroundStyle(Theme.ink)
+                        }
+                        if !booked.confirmation.isEmpty {
+                            Text("Confirmation \(booked.confirmation)").font(.caption).foregroundStyle(Theme.inkSecondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(Theme.handled.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                }
+
                 if didFail(s) {
                     Text("Klove couldn't get this booked automatically — the call details are below. You can hand it to a Klove specialist, or call the office yourself:")
                         .font(.caption).foregroundStyle(Theme.inkSecondary)
@@ -58,6 +75,13 @@ struct SessionLiveCard: View {
                 }.tint(Theme.accent)
             }
         }
+    }
+
+    /// The confirmed appointment details from a booked office, if any.
+    private func bookedDetails(_ s: SessionState) -> (when: String, confirmation: String)? {
+        guard let t = s.targets.first(where: { $0.status == "booked" }),
+              let sd = t.result?.structuredData, sd.appointmentBooked else { return nil }
+        return (when: sd.appointmentDateTime, confirmation: sd.confirmation)
     }
 
     private func didFail(_ s: SessionState) -> Bool {
