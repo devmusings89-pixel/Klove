@@ -106,7 +106,7 @@ struct UploadView: View {
     private func failure(_ message: String) -> some View {
         VStack(spacing: 16) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 48)).foregroundStyle(.orange)
+                .font(.system(size: 48)).foregroundStyle(Theme.needsYou)
             Text(message).multilineTextAlignment(.center).foregroundStyle(.secondary)
             Button("Try again") { model.reset(); photoItem = nil }
                 .buttonStyle(.borderedProminent)

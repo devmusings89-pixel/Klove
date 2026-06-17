@@ -130,7 +130,7 @@ struct BookAppointmentView: View {
         return o.isConfirmed ? "checkmark.seal.fill" : "phone.arrow.up.right.fill"
     }
     private func confTint(_ o: BookingOutcome) -> Color {
-        if o.isProvisional { return .orange }
+        if o.isProvisional { return Theme.needsYou }
         return o.isConfirmed ? Theme.handled : Theme.accent
     }
 

@@ -20,17 +20,8 @@ struct TaskDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label(task.memberName ?? "You", systemImage: task.kindSymbol)
-                        .font(.caption).foregroundStyle(Theme.accent)
-                    Text(task.title).font(.title2.weight(.semibold)).foregroundStyle(Theme.ink)
-                    if let detail = task.detail {
-                        Text(detail).font(.body).foregroundStyle(Theme.inkSecondary)
-                    }
-                    statusPill
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .kloveCard()
+                // The same canonical card shown on Today / Actions — consistent across entry points.
+                TaskCard(task: task)
 
                 // Show the live call card except on a choose-time task, where the time picker below
                 // is the relevant surface and the card would just duplicate it.
@@ -60,18 +51,6 @@ struct TaskDetailView: View {
     private func dismissTask() async {
         working = true; defer { working = false }
         if (try? await api.deleteTask(task.id)) != nil { onChange(); dismiss() }
-    }
-
-    private var statusPill: some View {
-        Text(state.replacingOccurrences(of: "_", with: " ").capitalized)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 10).padding(.vertical, 4)
-            .background(pillColor, in: Capsule())
-    }
-
-    private var pillColor: Color {
-        switch state { case "handled": return Theme.handled; case "waiting": return Theme.waiting; default: return Theme.needsYou }
     }
 
     private func chooseTimes(_ slots: [String]) -> some View {

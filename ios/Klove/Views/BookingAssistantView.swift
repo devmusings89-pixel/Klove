@@ -21,7 +21,8 @@ struct BookingAssistantView: View {
                         if model.isThinking { TypingIndicator() }
                         if model.showConfirmation { confirmationCard }
                         if let error = model.errorMessage {
-                            Text(error).font(.footnote).foregroundStyle(.red)
+                            Label(error, systemImage: "exclamationmark.triangle.fill")
+                                .font(.footnote).foregroundStyle(.red)
                         }
                     }
                     .padding()
@@ -32,6 +33,7 @@ struct BookingAssistantView: View {
             }
             inputBar
         }
+        .kloveBackground()
         .navigationTitle("Book a visit")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -52,9 +54,9 @@ struct BookingAssistantView: View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Hi! I can book a doctor's visit for you.")
-                    .font(.title3.weight(.semibold))
+                    .font(.kloveHeading).foregroundStyle(Theme.ink)
                 Text("Tell me what you need in your own words — I'll handle the calls and online booking.")
-                    .font(.subheadline).foregroundStyle(.secondary)
+                    .font(.kloveBody).foregroundStyle(Theme.inkSecondary)
             }
             .padding(.top, 8)
 
@@ -62,19 +64,19 @@ struct BookingAssistantView: View {
 
             if !model.recentProviders.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Book again").font(.caption).foregroundStyle(.secondary)
+                    Text("Book again").font(.kloveCaption).foregroundStyle(Theme.inkSecondary)
                     ForEach(model.recentProviders) { appt in
                         Button { model.rebook(appt) } label: {
                             HStack(spacing: 10) {
-                                Image(systemName: "arrow.counterclockwise.circle.fill").foregroundStyle(.tint)
+                                Image(systemName: "arrow.counterclockwise.circle.fill").foregroundStyle(Theme.accent)
                                 VStack(alignment: .leading) {
-                                    Text(appt.provider ?? "Provider").foregroundStyle(.primary)
-                                    Text(appt.title).font(.caption).foregroundStyle(.secondary)
+                                    Text(appt.provider ?? "Provider").foregroundStyle(Theme.ink)
+                                    Text(appt.title).font(.kloveCaption).foregroundStyle(Theme.inkSecondary)
                                 }
                                 Spacer()
                             }
                             .padding(.horizontal, 14).padding(.vertical, 10)
-                            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+                            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.md))
                         }
                         .buttonStyle(.plain)
                     }
@@ -92,15 +94,16 @@ struct BookingAssistantView: View {
                 TextField(speech.isRecording ? "Listening…" : "Ask to book a visit…", text: $model.input, axis: .vertical)
                     .lineLimit(1...4)
                     .textFieldStyle(.plain)
+                    .foregroundStyle(Theme.ink)
                     .padding(.horizontal, 14).padding(.vertical, 9)
-                    .background(Color(.secondarySystemBackground), in: Capsule())
+                    .background(Theme.surfaceSunken, in: Capsule())
                     .focused($inputFocused)
                     .onSubmit { Task { await model.send() } }
                 if speech.isAvailable {
                     Button { speech.toggle() } label: {
                         Image(systemName: speech.isRecording ? "stop.circle.fill" : "mic.circle.fill")
                             .font(.system(size: 30))
-                            .foregroundStyle(speech.isRecording ? .red : .secondary)
+                            .foregroundStyle(speech.isRecording ? .red : Theme.inkSecondary)
                     }
                     .accessibilityLabel(speech.isRecording ? "Stop dictation" : "Dictate request")
                 }
@@ -109,6 +112,7 @@ struct BookingAssistantView: View {
                     Task { await model.send() }
                 } label: {
                     Image(systemName: "arrow.up.circle.fill").font(.system(size: 30))
+                        .foregroundStyle(Theme.accent)
                 }
                 .disabled(model.input.trimmingCharacters(in: .whitespaces).isEmpty || model.isThinking)
             }
@@ -119,21 +123,22 @@ struct BookingAssistantView: View {
 
     private var confirmationCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Confirm your booking").font(.headline)
+            Text("Confirm your booking").font(.kloveHeading).foregroundStyle(Theme.ink)
 
             summaryRow("Visit", model.draft?.visitLabel ?? "a visit")
 
             // Office: pick a known provider or use the searched one.
             if let candidates = model.draft?.providerCandidates, !candidates.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Office").font(.caption).foregroundStyle(.secondary)
+                    Text("Office").font(.kloveCaption).foregroundStyle(Theme.inkSecondary)
                     ForEach(candidates) { c in
                         Button { model.selectedCandidate = c } label: {
                             HStack {
                                 Image(systemName: model.selectedCandidate == c ? "largecircle.fill.circle" : "circle")
+                                    .foregroundStyle(model.selectedCandidate == c ? Theme.accent : Theme.inkSecondary)
                                 VStack(alignment: .leading) {
-                                    Text(c.officeName).foregroundStyle(.primary)
-                                    if let loc = c.location { Text(loc).font(.caption).foregroundStyle(.secondary) }
+                                    Text(c.officeName).foregroundStyle(Theme.ink)
+                                    if let loc = c.location { Text(loc).font(.kloveCaption).foregroundStyle(Theme.inkSecondary) }
                                 }
                                 Spacer()
                             }
@@ -149,8 +154,8 @@ struct BookingAssistantView: View {
                 summaryRow("Preferred times", times)
             }
 
-            Divider()
-            Text("Your details").font(.caption).foregroundStyle(.secondary)
+            Divider().overlay(Theme.hairline)
+            Text("Your details").font(.kloveCaption).foregroundStyle(Theme.inkSecondary)
             TextField("Full name", text: $model.patientName).textContentType(.name)
             TextField("Date of birth (YYYY-MM-DD)", text: $model.patientDob)
             TextField("Email", text: $model.email).textContentType(.emailAddress)
@@ -158,8 +163,8 @@ struct BookingAssistantView: View {
             TextField("Phone (for callbacks)", text: $model.patientPhone)
                 .textContentType(.telephoneNumber).keyboardType(.phonePad)
 
-            Divider()
-            Text("Insurance (required)").font(.caption).foregroundStyle(.secondary)
+            Divider().overlay(Theme.hairline)
+            Text("Insurance (required)").font(.kloveCaption).foregroundStyle(Theme.inkSecondary)
             TextField("Insurance carrier (e.g. Blue Cross)", text: $model.insuranceCarrier)
                 .textInputAutocapitalization(.words)
             TextField("Member ID", text: $model.insuranceMemberId)
@@ -167,8 +172,9 @@ struct BookingAssistantView: View {
             TextField("Plan name (optional)", text: $model.insurancePlan)
             if model.insuranceCarrier.trimmingCharacters(in: .whitespaces).isEmpty
                 || model.insuranceMemberId.trimmingCharacters(in: .whitespaces).isEmpty {
-                Text("Offices ask for insurance to book — please add your carrier and member ID.")
-                    .font(.caption2).foregroundStyle(.secondary)
+                Label("Offices ask for insurance to book — please add your carrier and member ID.",
+                      systemImage: "exclamationmark.circle.fill")
+                    .font(.caption.weight(.medium)).foregroundStyle(Theme.needsYou)
             }
 
             Button {
@@ -176,21 +182,25 @@ struct BookingAssistantView: View {
             } label: {
                 HStack {
                     Spacer()
-                    if model.isBooking { ProgressView() } else { Text("Confirm & book — it's free").bold() }
+                    if model.isBooking { ProgressView().tint(.white) }
+                    else { Text("Confirm & book — it's free").font(.kloveButton) }
                     Spacer()
                 }
             }
             .buttonStyle(.borderedProminent)
+            .tint(Theme.accent)
+            .controlSize(.large)
             .disabled(!model.canBook || model.isBooking)
         }
         .padding()
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.lg))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.lg).stroke(Theme.hairline, lineWidth: 1))
     }
 
     private func summaryRow(_ label: String, _ value: String) -> some View {
         HStack(alignment: .top) {
-            Text(label).font(.caption).foregroundStyle(.secondary).frame(width: 110, alignment: .leading)
-            Text(value).font(.subheadline)
+            Text(label).font(.kloveCaption).foregroundStyle(Theme.inkSecondary).frame(width: 110, alignment: .leading)
+            Text(value).font(.kloveBody).foregroundStyle(Theme.ink)
             Spacer()
         }
     }
@@ -204,10 +214,11 @@ private struct ChatBubble: View {
         HStack {
             if message.role == .user { Spacer(minLength: 40) }
             Text(message.text)
+                .font(.kloveBody)
                 .padding(.horizontal, 14).padding(.vertical, 10)
-                .background(message.role == .user ? Color.accentColor : Color(.secondarySystemBackground),
-                            in: RoundedRectangle(cornerRadius: 16))
-                .foregroundStyle(message.role == .user ? .white : .primary)
+                .background(message.role == .user ? Theme.accent : Theme.surface,
+                            in: RoundedRectangle(cornerRadius: Theme.Radius.lg))
+                .foregroundStyle(message.role == .user ? Color.white : Theme.ink)
             if message.role == .assistant { Spacer(minLength: 40) }
         }
     }
@@ -216,8 +227,8 @@ private struct ChatBubble: View {
 private struct TypingIndicator: View {
     var body: some View {
         HStack(spacing: 6) {
-            ProgressView()
-            Text("Thinking…").font(.subheadline).foregroundStyle(.secondary)
+            ProgressView().tint(Theme.accent)
+            Text("Thinking…").font(.kloveBody).foregroundStyle(Theme.inkSecondary)
             Spacer()
         }
     }
@@ -232,10 +243,11 @@ private struct FlowChips: View {
             ForEach(chips, id: \.self) { chip in
                 Button { onTap(chip) } label: {
                     Text(chip)
-                        .font(.subheadline)
+                        .font(.kloveBody)
                         .padding(.horizontal, 14).padding(.vertical, 9)
-                        .background(Color(.secondarySystemBackground), in: Capsule())
-                        .foregroundStyle(.primary)
+                        .background(Theme.surface, in: Capsule())
+                        .overlay(Capsule().stroke(Theme.hairline, lineWidth: 1))
+                        .foregroundStyle(Theme.ink)
                 }
             }
         }

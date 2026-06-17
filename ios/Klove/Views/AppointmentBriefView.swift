@@ -121,7 +121,7 @@ struct AppointmentBriefView: View {
             if booked && provisional {
                 VStack(spacing: 4) {
                     Label("Provisional hold placed", systemImage: "calendar.badge.clock")
-                        .font(.subheadline.weight(.semibold)).foregroundStyle(.orange)
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.needsYou)
                     Text("Klove hasn't confirmed this with the office yet — you'll be updated in Today when it's confirmed.")
                         .font(.caption).foregroundStyle(Theme.inkSecondary).multilineTextAlignment(.center)
                 }

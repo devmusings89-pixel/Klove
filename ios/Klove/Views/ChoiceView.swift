@@ -15,29 +15,35 @@ struct ChoiceView: View {
         List {
             Section {
                 Text("Your preferred times weren't available. Pick a time and we'll call the office back to book it.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(.kloveBody)
+                    .foregroundStyle(Theme.inkSecondary)
             }
+            .listRowBackground(Theme.surface)
 
             ForEach(groupedByOffice, id: \.office) { group in
                 Section(group.office) {
                     ForEach(group.options) { option in
                         Button { Task { await choose(option) } } label: {
                             HStack {
-                                Text(option.slot)
+                                Text(option.slot).foregroundStyle(Theme.ink)
                                 Spacer()
-                                if submitting { ProgressView() } else { Image(systemName: "chevron.right").foregroundStyle(.tertiary) }
+                                if submitting { ProgressView() } else { Image(systemName: "chevron.right").foregroundStyle(Theme.inkSecondary) }
                             }
                         }
                         .disabled(submitting)
                     }
                 }
+                .listRowBackground(Theme.surface)
             }
 
             if let errorMessage {
                 Section { Text(errorMessage).foregroundStyle(.red) }
+                    .listRowBackground(Theme.surface)
             }
         }
+        .scrollContentBackground(.hidden)
+        .kloveBackground()
+        .tint(Theme.accent)
         .navigationTitle("Choose a time")
         .task { await load() }
     }

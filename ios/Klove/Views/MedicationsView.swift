@@ -131,8 +131,8 @@ struct MedicationsView: View {
             default:
                 HStack(spacing: 8) {
                     Button { Task { await setStatus(dose, "taken") } } label: {
-                        Text("Mark taken").font(.caption.weight(.semibold))
-                            .padding(.horizontal, 12).padding(.vertical, 6)
+                        Text("Mark taken").font(.kloveButton)
+                            .padding(.horizontal, 14).padding(.vertical, 7)
                             .background(Theme.accent, in: Capsule()).foregroundStyle(.white)
                     }
                     .disabled(pendingDoseId == dose.id)

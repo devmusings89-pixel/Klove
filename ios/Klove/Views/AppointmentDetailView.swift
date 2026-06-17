@@ -31,7 +31,7 @@ struct AppointmentDetailView: View {
                 if appt.isProvisional {
                     VStack(alignment: .leading, spacing: 6) {
                         Label("Provisional hold", systemImage: "exclamationmark.triangle.fill")
-                            .font(.subheadline.weight(.semibold)).foregroundStyle(.orange)
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.needsYou)
                         Text("Klove placed this time but hasn't confirmed it with the office yet. Don't rely on it until it's confirmed.")
                             .font(.caption).foregroundStyle(Theme.inkSecondary)
                     }

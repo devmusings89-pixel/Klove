@@ -552,6 +552,8 @@ model Task {
   sourceInsightId String? // -> HealthAlert.id that generated this task
   conciergeJobId  String? // -> Session.id when routed to the concierge engine
   options         String? // JSON array of offered alternate slots (when kind=choose_time)
+  bookingJson     String? // JSON: structured booking confirmation { when, whenText, provider, confirmation, verified }
+  followUpJson    String? // JSON: structured care follow-up { followUpType, recommendedSpecialty, daysToAction, guideline }
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 

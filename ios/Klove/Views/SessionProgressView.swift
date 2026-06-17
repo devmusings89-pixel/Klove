@@ -14,19 +14,21 @@ struct SessionProgressView: View {
             if let state {
                 Section {
                     Label(SessionStatusCopy.title(state.status), systemImage: SessionStatusCopy.icon(state.status))
-                        .font(.headline)
+                        .font(.kloveSectionHeader).foregroundStyle(Theme.ink)
                 }
+                .listRowBackground(Theme.surface)
                 if state.needsChoice {
                     Section {
                         Button {
                             router.push(.choice(sessionId: sessionId))
                         } label: {
                             Label("Choose a time (\(state.aggregatedOptions.count) options)", systemImage: "calendar.badge.clock")
-                                .font(.headline)
+                                .font(.kloveSectionHeader)
                         }
                     } footer: {
                         Text("Your preferred times weren't available. Pick one and we'll call back to book it.")
                     }
+                    .listRowBackground(Theme.surface)
                 }
                 if state.needsInfo {
                     Section {
@@ -34,11 +36,12 @@ struct SessionProgressView: View {
                             router.push(.info(sessionId: sessionId))
                         } label: {
                             Label("Provide info", systemImage: "exclamationmark.bubble")
-                                .font(.headline)
+                                .font(.kloveSectionHeader)
                         }
                     } footer: {
                         Text("An office needs more details before it can book. Tap to provide them.")
                     }
+                    .listRowBackground(Theme.surface)
                 }
                 if state.needsVerification {
                     Section {
@@ -46,29 +49,36 @@ struct SessionProgressView: View {
                             router.push(.verify(sessionId: sessionId))
                         } label: {
                             Label("Enter verification code", systemImage: "lock.shield")
-                                .font(.headline)
+                                .font(.kloveSectionHeader)
                         }
                     } footer: {
                         Text("The office sent you a one-time code. Enter it so we can finish booking.")
                     }
+                    .listRowBackground(Theme.surface)
                 }
                 Section("Offices") {
                     ForEach(state.targets) { target in
                         OfficeRow(target: target)
                     }
                 }
+                .listRowBackground(Theme.surface)
                 if state.status == "completed", state.targets.contains(where: { $0.status == "booked" || $0.status == "transferred" }) {
                     Section {
                         Label("Saved to Today, Actions, and the member's timeline.", systemImage: "tray.full")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.inkSecondary)
                     }
+                    .listRowBackground(Theme.surface)
                 }
             } else if let errorMessage {
                 Text(errorMessage).foregroundStyle(.red)
+                    .listRowBackground(Theme.surface)
             } else {
-                ProgressView("Starting calls…")
+                ProgressView("Starting calls…").tint(Theme.accent)
             }
         }
+        .scrollContentBackground(.hidden)
+        .kloveBackground()
+        .tint(Theme.accent)
         .navigationTitle("Progress")
         .task { await poll() }
     }

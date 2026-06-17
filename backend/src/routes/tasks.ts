@@ -21,7 +21,7 @@ export async function taskRoutes(app: FastifyInstance) {
       where: { subjectUserId: { in: subjects.map((s) => s.id) } },
       orderBy: [{ state: "asc" }, { createdAt: "desc" }],
     });
-    return tasks.map((t) => ({ ...t, memberName: nameById.get(t.subjectUserId) ?? "Member", options: fromJson<string[]>(t.options, []) }));
+    return tasks.map((t) => ({ ...t, memberName: nameById.get(t.subjectUserId) ?? "Member", options: fromJson<string[]>(t.options, []), booking: fromJson<unknown>(t.bookingJson, null), followUp: fromJson<unknown>(t.followUpJson, null) }));
   });
 
   app.get<{ Params: { id: string } }>("/tasks/:id", { preHandler: requireUser }, async (req, reply) => {

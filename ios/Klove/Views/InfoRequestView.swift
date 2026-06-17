@@ -16,34 +16,42 @@ struct InfoRequestView: View {
         List {
             Section {
                 Text("To finish booking, these offices asked for details we didn't have. Provide them and we'll call back to complete the booking.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(.kloveBody)
+                    .foregroundStyle(Theme.inkSecondary)
             }
+            .listRowBackground(Theme.surface)
 
             ForEach(requests) { req in
                 Section(req.officeName) {
                     ForEach(req.missingInfo, id: \.self) { item in
-                        Text("• \(item)").font(.subheadline)
+                        Text("• \(item)").font(.kloveBody).foregroundStyle(Theme.ink)
                     }
                     TextField("Type the requested details", text: binding(for: req.targetId), axis: .vertical)
                         .lineLimit(2...4)
+                        .foregroundStyle(Theme.ink)
                     Button {
                         Task { await submit(req) }
                     } label: {
                         HStack {
                             Spacer()
-                            if submitting { ProgressView() } else { Text("Send & call back").bold() }
+                            if submitting { ProgressView().tint(.white) } else { Text("Send & call back").font(.kloveButton) }
                             Spacer()
                         }
                     }
+                    .buttonStyle(.borderedProminent)
                     .disabled(submitting || (answers[req.targetId] ?? "").trimmingCharacters(in: .whitespaces).isEmpty)
                 }
+                .listRowBackground(Theme.surface)
             }
 
             if let errorMessage {
                 Section { Text(errorMessage).foregroundStyle(.red) }
+                    .listRowBackground(Theme.surface)
             }
         }
+        .scrollContentBackground(.hidden)
+        .kloveBackground()
+        .tint(Theme.accent)
         .navigationTitle("More info needed")
         .task { await load() }
     }

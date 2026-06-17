@@ -92,7 +92,7 @@ struct TodayView: View {
                                        onDone: { Task { await quickDone(task) } },
                                        onDelegate: { Task { await quickDelegate(task) } })
                 } else {
-                    NavigationLink(value: task) { TaskRow(task: task, tint: tint) }.buttonStyle(.plain)
+                    NavigationLink(value: task) { TaskCard(task: task) }.buttonStyle(.plain)
                 }
             }
         }
@@ -123,7 +123,7 @@ struct TodayView: View {
                                 .font(.caption).foregroundStyle(Theme.inkSecondary)
                             if a.isProvisional {
                                 Label("Provisional — not yet confirmed", systemImage: "exclamationmark.circle")
-                                    .font(.caption2.weight(.semibold)).foregroundStyle(.orange)
+                                    .font(.caption2.weight(.semibold)).foregroundStyle(Theme.needsYou)
                             }
                         }
                         Spacer()
@@ -176,31 +176,25 @@ struct ActionableTaskCard: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            NavigationLink(value: task) {
-                HStack(spacing: 12) {
-                    Image(systemName: task.kindSymbol).foregroundStyle(tint).frame(width: 26)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(task.title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
-                        if let m = task.memberName { Text(m).font(.caption).foregroundStyle(Theme.inkSecondary) }
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(Theme.inkSecondary)
-                }
-            }
-            .buttonStyle(.plain)
+            // Same structured body as every other card — with next-step buttons attached below.
+            NavigationLink(value: task) { TaskCardBody(task: task) }
+                .buttonStyle(.plain)
 
-            HStack(spacing: 10) {
+            // One clear next step: a single prominent action, with a quiet alternative beneath it.
+            VStack(spacing: 8) {
                 Button { working = true; onDelegate() } label: {
                     Label("Have Klove do it", systemImage: "sparkles")
-                        .font(.caption.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 9)
+                        .font(.kloveButton).frame(maxWidth: .infinity).padding(.vertical, 11)
                 }
-                .foregroundStyle(.white).background(Theme.accent, in: RoundedRectangle(cornerRadius: 10))
+                .foregroundStyle(.white)
+                .background(Theme.accent, in: RoundedRectangle(cornerRadius: Theme.Radius.sm))
 
                 Button { working = true; onDone() } label: {
-                    Label("Mark done", systemImage: "checkmark")
-                        .font(.caption.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 9)
+                    Text("I'll handle it — mark done")
+                        .font(.kloveCaption.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 4)
                 }
-                .foregroundStyle(Theme.ink).background(Theme.surfaceSunken, in: RoundedRectangle(cornerRadius: 10))
+                .foregroundStyle(Theme.inkSecondary)
+                .buttonStyle(.plain)
             }
             .disabled(working)
         }

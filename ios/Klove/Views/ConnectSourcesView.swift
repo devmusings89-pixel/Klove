@@ -75,7 +75,7 @@ private struct SourceRow: View {
             if case .failed(let message) = state {
                 Text(message)
                     .font(.footnote)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Theme.needsYou)
             }
         }
         .padding()

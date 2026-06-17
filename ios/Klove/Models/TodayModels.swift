@@ -1,5 +1,54 @@
 import Foundation
 
+/// Structured booking confirmation attached to a booking task (mirrors backend Task.bookingJson).
+struct BookingInfo: Decodable, Hashable {
+    let when: String?          // ISO date-time, or null when only free-text is known
+    let whenText: String?      // human label the backend produced
+    let provider: String?
+    let confirmation: String?
+    let verified: Bool         // true = office-confirmed; false = provisional hold
+
+    /// Polished, locale-aware "Thu, Jun 19 · 11:02 PM"; falls back to the backend's text.
+    var whenDisplay: String {
+        if let s = when, let d = ISO8601DateFormatter().date(from: s) {
+            let f = DateFormatter(); f.dateFormat = "EEE, MMM d · h:mm a"
+            return f.string(from: d)
+        }
+        return whenText ?? "Time to be confirmed"
+    }
+}
+
+/// Structured care follow-up attached to a health-insight task (mirrors backend Task.followUpJson).
+struct FollowUpInfo: Decodable, Hashable {
+    let followUpType: String?      // book_visit | retest | refill | referral | vaccine | med_review
+    let recommendedSpecialty: String?
+    let daysToAction: Int?
+    let guideline: String?
+
+    /// Human verb for the recommended action.
+    var actionLabel: String {
+        switch followUpType {
+        case "book_visit": return "Book a visit"
+        case "retest": return "Re-test"
+        case "refill": return "Refill"
+        case "referral": return "Get a referral"
+        case "vaccine": return "Get vaccinated"
+        case "med_review": return "Review medications"
+        default: return "Follow up"
+        }
+    }
+    var icon: String {
+        switch followUpType {
+        case "book_visit", "referral": return "calendar.badge.plus"
+        case "retest": return "arrow.clockwise"
+        case "refill": return "pills.fill"
+        case "vaccine": return "syringe.fill"
+        case "med_review": return "checklist"
+        default: return "arrow.uturn.forward"
+        }
+    }
+}
+
 /// A task in the Today briefing / Actions log (mirrors backend Task + memberName).
 struct KloveTask: Decodable, Identifiable, Hashable {
     let id: String
@@ -11,8 +60,16 @@ struct KloveTask: Decodable, Identifiable, Hashable {
     let subjectUserId: String?
     let conciergeJobId: String?
     let options: [String]?
+    let booking: BookingInfo?
+    let followUp: FollowUpInfo?
 
     var isChooseTime: Bool { kind == "choose_time" }
+    var isBooking: Bool { booking != nil }
+
+    /// Title without the internal "Booking:/Hold:" prefix (status is shown separately on the card).
+    var displayTitle: String {
+        title.replacingOccurrences(of: #"^(Booking|Hold):\s*"#, with: "", options: .regularExpression)
+    }
 
     var kindSymbol: String {
         switch kind {

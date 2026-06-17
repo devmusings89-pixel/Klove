@@ -148,11 +148,11 @@ struct OfficeRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(target.officeName).font(.body.weight(.medium))
+                Text(target.officeName).font(.body.weight(.medium)).foregroundStyle(Theme.ink)
                 if let channel = target.channel {
                     Image(systemName: channel == "web" ? "globe" : "phone.fill")
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.inkSecondary)
                         .accessibilityLabel(channel == "web" ? "booked online" : "booked by phone")
                 }
                 Spacer()
@@ -161,25 +161,25 @@ struct OfficeRow: View {
 
             if isProvisional {
                 Label("Provisional hold — no live call was placed, so this isn't confirmed with the office yet.", systemImage: "exclamationmark.circle")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.caption).foregroundStyle(Theme.needsYou)
             } else if let booked = target.result?.structuredData, booked.appointmentBooked {
                 Label("Booked: \(booked.appointmentDateTime)", systemImage: "checkmark.circle.fill")
-                    .font(.caption).foregroundStyle(.green)
+                    .font(.caption).foregroundStyle(Theme.handled)
                 if !booked.confirmation.isEmpty {
-                    Text("Confirmation: \(booked.confirmation)").font(.caption2).foregroundStyle(.secondary)
+                    Text("Confirmation: \(booked.confirmation)").font(.caption2).foregroundStyle(Theme.inkSecondary)
                 }
             }
 
             if target.status == "transferred" {
                 Label("We connected the office to you to finish booking.", systemImage: "phone.connection")
-                    .font(.caption).foregroundStyle(.green)
+                    .font(.caption).foregroundStyle(Theme.handled)
             }
 
             if let summary = target.result?.summary, !summary.isEmpty {
-                Text(summary).font(.caption).foregroundStyle(.secondary)
+                Text(summary).font(.caption).foregroundStyle(Theme.inkSecondary)
             }
             if let wd = target.result?.whenDuration {
-                Text(wd).font(.caption2).foregroundStyle(.secondary)
+                Text(wd).font(.caption2).foregroundStyle(Theme.inkSecondary)
             }
 
             if hasDetails {
@@ -189,9 +189,9 @@ struct OfficeRow: View {
                             if let t = r.transcript, !t.isEmpty {
                                 VStack(alignment: .leading, spacing: 2) {
                                     if let wd = r.whenDuration {
-                                        Text(wd).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                                        Text(wd).font(.caption2.weight(.semibold)).foregroundStyle(Theme.inkSecondary)
                                     }
-                                    Text(t).font(.caption).foregroundStyle(.primary).textSelection(.enabled)
+                                    Text(t).font(.caption).foregroundStyle(Theme.ink).textSelection(.enabled)
                                 }
                             }
                             if let rec = r.recordingUrl, let url = URL(string: rec) {
@@ -252,14 +252,14 @@ struct StatusBadge: View {
 
     private var color: Color {
         switch status {
-        case "booked", "transferred": return .green
+        case "booked", "transferred": return Theme.handled
         case "calling": return .blue
         case "awaiting_choice": return .purple
-        case "awaiting_info", "provisional", "voicemail": return .orange
+        case "awaiting_info", "provisional", "voicemail": return Theme.needsYou
         case "awaiting_verification": return .indigo
         case "requested": return .teal
         case "failed", "no_answer": return .red
-        default: return .gray
+        default: return Theme.waiting
         }
     }
 }

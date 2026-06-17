@@ -67,7 +67,7 @@ struct ActionsView: View {
                                            onDone: { Task { _ = try? await api.updateTask(task.id, state: "handled"); await load() } },
                                            onDelegate: { Task { _ = try? await api.routeTaskToConcierge(task.id); await load() } })
                     } else {
-                        NavigationLink(value: task) { TaskRow(task: task, tint: tint) }.buttonStyle(.plain)
+                        NavigationLink(value: task) { TaskCard(task: task) }.buttonStyle(.plain)
                     }
                 }
             }

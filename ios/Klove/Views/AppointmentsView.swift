@@ -93,13 +93,13 @@ private struct PendingActionRow: View {
     let action: PendingAction
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: icon).foregroundStyle(.orange).font(.title3).frame(width: 28)
+            Image(systemName: icon).foregroundStyle(Theme.needsYou).font(.title3).frame(width: 28)
             VStack(alignment: .leading, spacing: 3) {
                 Text(action.title).font(.headline)
                 Text(action.detail).font(.subheadline).foregroundStyle(.secondary)
             }
             Spacer()
-            Text(cta).font(.caption.weight(.semibold)).foregroundStyle(.orange)
+            Text(cta).font(.caption.weight(.semibold)).foregroundStyle(Theme.needsYou)
         }
         .padding(.vertical, 2)
     }
@@ -180,7 +180,7 @@ struct AppointmentRow: View {
                 }
                 if appointment.isProvisional {
                     Label("Provisional — not yet confirmed", systemImage: "exclamationmark.circle")
-                        .font(.caption2.weight(.semibold)).foregroundStyle(.orange)
+                        .font(.caption2.weight(.semibold)).foregroundStyle(Theme.needsYou)
                 } else if let confirmation = appointment.confirmation {
                     Text("Confirmation: \(confirmation)").font(.caption2).foregroundStyle(.secondary)
                 }

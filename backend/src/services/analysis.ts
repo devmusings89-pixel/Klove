@@ -146,6 +146,9 @@ export async function runAnalysis(userId: string, generatedByJobId?: string): Pr
     });
     // Actionable insights (watch/urgent) become an approvable Task in Today. Info stays an insight.
     if (membership && d.severity !== "info") {
+      const followUp = d.followUpType || d.recommendedSpecialty || d.daysToAction || d.guideline
+        ? toJson({ followUpType: d.followUpType, recommendedSpecialty: d.recommendedSpecialty, daysToAction: d.daysToAction, guideline: d.guideline })
+        : null;
       await prisma.task.create({
         data: {
           subjectUserId: userId,
@@ -155,6 +158,7 @@ export async function runAnalysis(userId: string, generatedByJobId?: string): Pr
           state: "needs_you",
           kind: "review",
           sourceInsightId: alert.id,
+          followUpJson: followUp,
         },
       });
     }

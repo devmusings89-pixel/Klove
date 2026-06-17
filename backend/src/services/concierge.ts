@@ -233,7 +233,8 @@ async function simulatedBooking(subjectUserId: string, householdId: string, inpu
       subjectUserId,
       householdId,
       title: `Hold: ${reason}`,
-      detail: `Provisional hold for ${whenLabel(startsAt)}${providerLabel} — not yet confirmed with the office.`,
+      detail: `Provisional hold — not yet confirmed with the office.`,
+      bookingJson: toJson({ when: startsAt.toISOString(), whenText: whenLabel(startsAt), provider, confirmation: null, verified: false }),
       state: "handled",
       kind: "book",
       conciergeJobId: session.id,
@@ -315,7 +316,11 @@ export async function reconcileConciergeJobs(): Promise<void> {
       });
       await prisma.task.update({
         where: { id: task.id },
-        data: { state: "handled", detail: `Confirmed for ${whenText} with ${booked.officeName} · ${confirmation}` },
+        data: {
+          state: "handled",
+          detail: `Confirmed with ${booked.officeName}.`,
+          bookingJson: toJson({ when: when ? when.toISOString() : null, whenText, provider: booked.officeName, confirmation, verified: true }),
+        },
       });
       await prisma.message.create({
         data: {

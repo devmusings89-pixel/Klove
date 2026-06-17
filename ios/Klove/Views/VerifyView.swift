@@ -17,38 +17,46 @@ struct VerifyView: View {
         List {
             Section {
                 Text("The office sent you a one-time code to confirm your booking. Check your email or text messages, then enter the code below.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(.kloveBody)
+                    .foregroundStyle(Theme.inkSecondary)
             }
+            .listRowBackground(Theme.surface)
 
             ForEach(requests) { req in
                 Section(req.officeName) {
                     if let slot = req.slot {
-                        Text("Booking: \(slot)").font(.subheadline)
+                        Text("Booking: \(slot)").font(.kloveBody).foregroundStyle(Theme.ink)
                     }
                     Text("Code sent to \(req.contact ?? "your email or phone").")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.kloveCaption).foregroundStyle(Theme.inkSecondary)
                     TextField("Enter code", text: binding(for: req.targetId))
                         .keyboardType(.numberPad)
                         .textContentType(.oneTimeCode)
                         .font(.title3.monospacedDigit())
+                        .foregroundStyle(Theme.ink)
                     Button {
                         Task { await submit(req) }
                     } label: {
                         HStack {
                             Spacer()
-                            if submitting { ProgressView() } else { Text("Confirm booking").bold() }
+                            if submitting { ProgressView().tint(.white) } else { Text("Confirm booking").font(.kloveButton) }
                             Spacer()
                         }
                     }
+                    .buttonStyle(.borderedProminent)
                     .disabled(submitting || (codes[req.targetId] ?? "").trimmingCharacters(in: .whitespaces).count < 3)
                 }
+                .listRowBackground(Theme.surface)
             }
 
             if let errorMessage {
                 Section { Text(errorMessage).foregroundStyle(.red) }
+                    .listRowBackground(Theme.surface)
             }
         }
+        .scrollContentBackground(.hidden)
+        .kloveBackground()
+        .tint(Theme.accent)
         .navigationTitle("Enter your code")
         .task { await load() }
     }

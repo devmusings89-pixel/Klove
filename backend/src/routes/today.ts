@@ -36,6 +36,8 @@ export async function todayRoutes(app: FastifyInstance) {
       memberName: nameById.get(t.subjectUserId) ?? "Member",
       subjectUserId: t.subjectUserId,
       options: fromJson<string[]>(t.options, []),
+      booking: fromJson<unknown>(t.bookingJson, null),
+      followUp: fromJson<unknown>(t.followUpJson, null),
       createdAt: t.createdAt,
     });
 
