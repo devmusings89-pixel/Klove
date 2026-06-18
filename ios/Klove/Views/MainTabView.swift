@@ -52,6 +52,13 @@ struct MainTabView: View {
             await store.load()
             PushManager.register()   // ask for notifications + register the APNs token
         }
+        .onReceive(NotificationCenter.default.publisher(for: .kloveDeepLink)) { note in
+            // A tapped push asked us to deep-link to a tab; refresh so the new task/appointment shows.
+            if let tab = note.userInfo?["tab"] as? String {
+                selection = KloveTab(name: tab)
+                store.bumpData()
+            }
+        }
         .sheet(isPresented: $showAsk) {
             AskKloveView().environment(store)
         }

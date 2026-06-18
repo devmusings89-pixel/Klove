@@ -32,21 +32,33 @@ export async function registerDeviceToken(userId: string, token: string): Promis
 /**
  * Best-effort push to a specific user (used by reminders and concierge updates). `force` bypasses
  * the general push preference for safety-critical alerts (e.g. a missed critical-medication dose).
+ * `link` is an optional deep-link hint (e.g. "actions"/"today") the app reads on tap to navigate.
  */
-export async function sendPushToUser(userId: string, title: string, body: string, force = false): Promise<void> {
+export async function sendPushToUser(userId: string, title: string, body: string, force = false, link?: string): Promise<void> {
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { apnsToken: true, pushEnabled: true } });
   if (!user?.apnsToken) return;
   if (user.pushEnabled === false && !force) return; // respect the preference unless it's safety-critical
-  await sendApns(user.apnsToken, title, body);
+  await sendApns(user.apnsToken, title, body, link);
+}
+
+/**
+ * Build the APNs JSON payload. A `link` hint is added as a top-level custom key (allowed alongside
+ * `aps`) that the iOS app reads on notification tap to deep-link to the relevant tab. Pure so the
+ * payload shape is unit-testable without sending anything.
+ */
+export function buildApnsPayload(title: string, body: string, link?: string): Record<string, unknown> {
+  const payload: Record<string, unknown> = { aps: { alert: { title, body }, sound: "default" } };
+  if (link) payload.link = link;
+  return payload;
 }
 
 /**
  * Send one APNs notification. Mock mode logs; live mode (APNS_* set) sends over the APNs HTTP/2 API
  * with a JWT provider token. Implemented as best-effort — failures never throw into the caller.
  */
-async function sendApns(token: string, title: string, body: string): Promise<void> {
+async function sendApns(token: string, title: string, body: string, link?: string): Promise<void> {
   if (!enabled.apns()) {
-    console.log(`[push mock] → ${token.slice(0, 8)}… "${title}: ${body}"`);
+    console.log(`[push mock] → ${token.slice(0, 8)}… "${title}: ${body}"${link ? ` [link:${link}]` : ""}`);
     return;
   }
   try {
@@ -73,7 +85,7 @@ async function sendApns(token: string, title: string, body: string): Promise<voi
         client.close();
         resolve();
       });
-      req.end(JSON.stringify({ aps: { alert: { title, body }, sound: "default" } }));
+      req.end(JSON.stringify(buildApnsPayload(title, body, link)));
       req.resume();
     });
   } catch (err) {
