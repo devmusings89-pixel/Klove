@@ -6,6 +6,7 @@
 // new household-scoped routes have something to resolve. Idempotent — safe to re-run.
 //
 // Usage: npm run backfill-households
+import { Prisma } from "@prisma/client";
 import { prisma } from "../src/db.js";
 
 export async function backfillHouseholds(): Promise<{ created: number; skipped: number }> {
@@ -25,20 +26,31 @@ export async function backfillHouseholds(): Promise<{ created: number; skipped: 
       continue;
     }
 
-    await prisma.household.create({
-      data: {
-        operatorUserId: user.id,
-        memberships: {
-          create: {
-            userId: user.id,
-            relationship: "self",
-            memberType: "self",
-            isOperator: true,
+    try {
+      await prisma.household.create({
+        data: {
+          operatorUserId: user.id,
+          memberships: {
+            create: {
+              userId: user.id,
+              relationship: "self",
+              memberType: "self",
+              isOperator: true,
+            },
           },
         },
-      },
-    });
-    created++;
+      });
+      created++;
+    } catch (err) {
+      // The user may have been deleted between the scan above and this create (FK violation), or a
+      // concurrent run created the household first (unique violation). A best-effort backfill should
+      // skip and continue rather than abort the whole pass.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && (err.code === "P2003" || err.code === "P2002")) {
+        skipped++;
+        continue;
+      }
+      throw err;
+    }
   }
 
   return { created, skipped };

@@ -142,12 +142,15 @@ test("refill re-nudges for a new due-date cycle (per-cycle idempotency)", async 
   const { memberId, householdId } = await mkCaregiverAndMember("recycle");
   const now = new Date();
   const med = await mkMedication(memberId, "Levothyroxine", { nextRefillDue: new Date(now.getTime() + 2 * 86_400_000) });
-  assert.equal(await runRefillTick(now), 1);
+  // runRefillTick is global; assert this household's effect, not the global return count (which a
+  // shared test DB makes non-deterministic).
+  await runRefillTick(now);
+  assert.equal(await prisma.message.count({ where: { householdId, title: "Refill due soon" } }), 1, "first cycle nudges this household once");
   // Next cycle: a new due date → a new nudge, not silently suppressed.
   await prisma.medicationStatement.update({ where: { id: med.id }, data: { nextRefillDue: new Date(now.getTime() + 32 * 86_400_000) } });
   const later = new Date(now.getTime() + 30 * 86_400_000);
-  assert.equal(await runRefillTick(later), 1, "a new due date nudges again");
-  assert.equal(await prisma.message.count({ where: { householdId, title: "Refill due soon" } }), 2);
+  await runRefillTick(later);
+  assert.equal(await prisma.message.count({ where: { householdId, title: "Refill due soon" } }), 2, "a new due date nudges again");
 });
 
 test("refill tick nudges the caregiver once for a medication due soon", async () => {
@@ -155,10 +158,12 @@ test("refill tick nudges the caregiver once for a medication due soon", async ()
   const now = new Date();
   await mkMedication(memberId, "Atorvastatin 20mg", { nextRefillDue: new Date(now.getTime() + 2 * 86_400_000) });
 
-  assert.equal(await runRefillTick(now), 1);
-  assert.equal(await runRefillTick(now), 0, "idempotent — no duplicate refill nudge");
+  // Two ticks; assert the household-scoped invariant (exactly one nudge) rather than the global
+  // return count, which leftover meds in a shared test DB make non-deterministic.
+  await runRefillTick(now);
+  await runRefillTick(now); // idempotent — must not add a second nudge for the same cycle
   const msgs = await prisma.message.findMany({ where: { householdId, title: "Refill due soon" } });
-  assert.equal(msgs.length, 1);
+  assert.equal(msgs.length, 1, "idempotent — exactly one refill nudge for this household");
   assert.match(msgs[0].body, /Atorvastatin/);
 });
 
