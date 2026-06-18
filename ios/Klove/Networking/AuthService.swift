@@ -157,6 +157,38 @@ final class AuthService: NSObject {
         await emailAuth(path: "/auth/v1/token?grant_type=password", email: email, password: password, isSignup: false)
     }
 
+    /// Passwordless "magic link" sign-in (the V1 onboarding identity flow).
+    ///
+    /// In a mock/dev build (no Supabase configured) the email is a sufficient, stable identity — sent
+    /// to the backend via the `x-user-email` header — so we sign in immediately and let onboarding
+    /// continue collecting details. With Supabase configured we ask GoTrue to email a one-time link;
+    /// completing the session requires the `klove://auth-callback` deep link (mirrors the Google flow),
+    /// so we return success-to-send and surface a check-your-email state.
+    @discardableResult
+    func sendMagicLink(_ email: String) async -> Bool {
+        let trimmed = email.trimmingCharacters(in: .whitespaces).lowercased()
+        guard trimmed.contains("@"), trimmed.contains(".") else {
+            errorMessage = "Enter a valid email."
+            return false
+        }
+        if !requiresRealToken {
+            UserDefaults.standard.set(trimmed, forKey: AppStorageKey.userEmail)
+            isAuthenticated = true
+            errorMessage = nil
+            return true
+        }
+        guard let url = URL(string: "\(Config.supabaseURL)/auth/v1/otp") else { return false }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["email": trimmed, "create_user": true])
+        let status = ((try? await URLSession.shared.data(for: req))?.1 as? HTTPURLResponse)?.statusCode ?? 500
+        if status < 300 { errorMessage = nil; return true }
+        errorMessage = "Couldn't send your link. Please try again."
+        return false
+    }
+
     private func emailAuth(path: String, email: String, password: String, isSignup: Bool) async -> Bool {
         guard !Config.supabaseURL.isEmpty, !Config.supabaseAnonKey.isEmpty else {
             errorMessage = "Email accounts need Supabase configured."

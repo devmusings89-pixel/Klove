@@ -7,6 +7,7 @@ struct ActionsView: View {
     @State private var tasks: [KloveTask] = []
     @State private var loading = true
     @State private var showBook = false
+    @State private var segment = 0   // 0 = Active, 1 = Done
     private let api = APIClient()
 
     private var needsYou: [KloveTask] { tasks.filter { $0.state == "needs_you" } }
@@ -15,18 +16,22 @@ struct ActionsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
+                ledgerHeader
                 if loading && tasks.isEmpty {
                     ProgressView().frame(maxWidth: .infinity).padding(.top, 60)
                 } else if tasks.isEmpty {
                     empty
+                } else if segment == 0 {
+                    group("Needs you", needsYou)
+                    group("Waiting on provider", waiting)
+                    if needsYou.isEmpty && waiting.isEmpty { allClear }
                 } else {
-                    group("Needs you", needsYou, Theme.needsYou, actionable: true)
-                    group("Waiting on provider", waiting, Theme.waiting)
-                    group("Handled", handled, Theme.handled)
+                    group("Handled", handled)
+                    if handled.isEmpty { allClear }
                 }
             }
-            .padding(20)
+            .padding(Theme.Spacing.xl)
         }
         .background(Theme.background.ignoresSafeArea())
         .contentMargins(.bottom, 80, for: .scrollContent)
@@ -58,36 +63,48 @@ struct ActionsView: View {
         tasks = (try? await api.getTasks()) ?? []
     }
 
-    @ViewBuilder private func group(_ title: String, _ items: [KloveTask], _ tint: Color, actionable: Bool = false) -> some View {
+    private var ledgerHeader: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+            Text("Klove's ledger · everything we're tracking".uppercased())
+                .font(.kloveLabel).tracking(Theme.Tracking.label).foregroundStyle(Theme.inkSecondary)
+            KloveSegmentedControl(segments: ["Active", "Done"], selection: $segment)
+        }
+    }
+
+    @ViewBuilder private func group(_ title: String, _ items: [KloveTask]) -> some View {
         if !items.isEmpty {
-            VStack(alignment: .leading, spacing: 12) {
-                Text(title).font(.headline).foregroundStyle(tint)
+            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                SectionLabel(title: title, count: items.count)
                 ForEach(items) { task in
-                    if actionable && !task.isChooseTime {
-                        ActionableTaskCard(task: task, tint: tint,
-                                           onDone: { Task { _ = try? await api.updateTask(task.id, state: "handled"); await load() } },
-                                           onDelegate: { Task { _ = try? await api.routeTaskToConcierge(task.id); await load() } })
-                    } else {
-                        NavigationLink(value: task) { TaskCard(task: task) }.buttonStyle(.plain)
-                    }
+                    NavigationLink(value: task) { TaskCard(task: task) }.buttonStyle(.plain)
                 }
             }
         }
     }
 
+    private var allClear: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            Text(segment == 0 ? "Nothing active" : "Nothing here yet")
+                .font(.kloveSerifHeading).foregroundStyle(Theme.ink)
+            Text(segment == 0 ? "Klove isn't waiting on anything right now."
+                              : "Completed tasks will collect here.")
+                .font(.kloveBody).foregroundStyle(Theme.inkSecondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .kloveCard()
+    }
+
     private var empty: some View {
         VStack(spacing: 14) {
-            Image(systemName: "checklist").font(.system(size: 40)).foregroundStyle(Theme.accent).padding(.top, 60)
-            Text("No actions yet").font(.title3.weight(.semibold)).foregroundStyle(Theme.ink)
+            Image(systemName: "checklist").font(.system(size: 40)).foregroundStyle(Theme.ink).padding(.top, 60)
+            Text("No actions yet").font(.kloveSerifHeading).foregroundStyle(Theme.ink)
             Text("As Klove coordinates your family's care, tasks show up here. Need something now? Start by booking a visit.")
-                .font(.subheadline).foregroundStyle(Theme.inkSecondary).multilineTextAlignment(.center).padding(.horizontal, 32)
+                .font(.kloveBody).foregroundStyle(Theme.inkSecondary).multilineTextAlignment(.center).padding(.horizontal, 32)
             Button { showBook = true } label: {
                 Label("Book an appointment", systemImage: "calendar.badge.plus")
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
-                    .padding(.horizontal, 20).padding(.vertical, 12)
-                    .background(Theme.accent, in: Capsule())
             }
-            .padding(.top, 4)
+            .buttonStyle(KlovePrimaryButtonStyle())
+            .padding(.horizontal, 40).padding(.top, 4)
         }
         .frame(maxWidth: .infinity)
     }

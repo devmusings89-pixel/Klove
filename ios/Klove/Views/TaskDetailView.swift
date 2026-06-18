@@ -80,17 +80,20 @@ struct TaskDetailView: View {
 
     private var actions: some View {
         VStack(spacing: 12) {
-            Button { Task { await handle() } } label: {
-                Label("Mark handled", systemImage: "checkmark.circle.fill")
-                    .frame(maxWidth: .infinity).padding(.vertical, 12)
-            }
-            .foregroundStyle(.white).background(Theme.handled, in: RoundedRectangle(cornerRadius: 12)).disabled(working)
-
+            // Primary next step: hand it to Klove.
             Button { Task { await route() } } label: {
                 Label("Have Klove handle it", systemImage: "sparkles")
-                    .frame(maxWidth: .infinity).padding(.vertical, 12)
             }
-            .foregroundStyle(.white).background(Theme.accent, in: RoundedRectangle(cornerRadius: 12)).disabled(working)
+            .buttonStyle(KlovePrimaryButtonStyle()).disabled(working)
+
+            // Quiet alternative: do it yourself.
+            Button { Task { await handle() } } label: {
+                Label("I'll handle it — mark done", systemImage: "checkmark.circle")
+                    .font(.kloveButton).foregroundStyle(Theme.ink)
+                    .frame(maxWidth: .infinity).padding(.vertical, 14)
+            }
+            .background(Theme.surfaceSunken, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
+            .buttonStyle(.plain).disabled(working)
 
             // The spec's third choice: do it now, hand to Klove, or snooze it out of the way.
             Menu {
@@ -99,9 +102,10 @@ struct TaskDetailView: View {
                 Button("2 weeks") { Task { await snooze(14) } }
             } label: {
                 Label("Snooze", systemImage: "clock.arrow.circlepath")
+                    .font(.kloveButton).foregroundStyle(Theme.inkSecondary)
                     .frame(maxWidth: .infinity).padding(.vertical, 12)
             }
-            .foregroundStyle(Theme.ink).background(Theme.surfaceSunken, in: RoundedRectangle(cornerRadius: 12)).disabled(working)
+            .disabled(working)
         }
     }
 

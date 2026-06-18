@@ -145,7 +145,7 @@ struct AppointmentBriefView: View {
                     Label("Have Klove book & coordinate", systemImage: "sparkles")
                         .frame(maxWidth: .infinity).padding(.vertical, 12)
                 }
-                .foregroundStyle(.white).background(Theme.accent, in: RoundedRectangle(cornerRadius: 12)).disabled(booking)
+                .foregroundStyle(Theme.background).background(Theme.accent, in: RoundedRectangle(cornerRadius: 12)).disabled(booking)
                 Text("You authorize Klove to contact the office on \(memberName)'s behalf.")
                     .font(.caption2).foregroundStyle(Theme.inkSecondary)
             }

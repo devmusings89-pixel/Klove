@@ -203,7 +203,7 @@ struct MemberProfileView: View {
                     Label("Send invite", systemImage: "paperplane.fill")
                         .frame(maxWidth: .infinity).padding(.vertical, 12)
                 }
-                .foregroundStyle(.white).background(Theme.accent, in: RoundedRectangle(cornerRadius: 12))
+                .foregroundStyle(Theme.background).background(Theme.accent, in: RoundedRectangle(cornerRadius: 12))
             }
             if d.consent.status == "active" {
                 Button(role: .destructive) { confirmRevoke = true } label: {

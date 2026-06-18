@@ -25,15 +25,15 @@ struct MainTabView: View {
         ZStack(alignment: .bottomTrailing) {
             TabView(selection: $selection) {
                 NavigationStack { TodayView() }
-                    .tabItem { Label("Today", systemImage: "sun.max.fill") }
+                    .tabItem { Label("Today", systemImage: "house") }
                     .tag(KloveTab.today)
 
                 NavigationStack { FamilyView() }
-                    .tabItem { Label("Family", systemImage: "person.2.fill") }
+                    .tabItem { Label("Household", systemImage: "person.2") }
                     .tag(KloveTab.family)
 
                 NavigationStack { RecordsView() }
-                    .tabItem { Label("Records", systemImage: "list.bullet.clipboard.fill") }
+                    .tabItem { Label("Records", systemImage: "doc.text") }
                     .tag(KloveTab.records)
 
                 NavigationStack { ActionsView() }
@@ -44,7 +44,7 @@ struct MainTabView: View {
 
             AskKloveButton { showAsk = true }
                 .padding(.trailing, 18)
-                .padding(.bottom, 60)
+                .padding(.bottom, 58)
                 .accessibilityLabel("Ask Klove")
         }
         .environment(store)
@@ -65,21 +65,20 @@ struct MainTabView: View {
     }
 }
 
-/// The "Ask Klove" affordance — a labeled pill (not a bare button) so it reads as the assistant you
-/// talk to, distinct from the explicit action buttons on each task.
+/// The "Ask Klove" affordance — a circular ink FAB floating above the tab bar (never a tab), matching
+/// every V1 screen. The sparkles glyph reads as the assistant you talk to, distinct from the explicit
+/// action buttons on each task.
 struct AskKloveButton: View {
     var action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: "sparkles").font(.system(size: 15, weight: .semibold))
-                Text("Ask Klove").font(.subheadline.weight(.semibold))
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 16).padding(.vertical, 12)
-            .background(Theme.accent, in: Capsule())
-            .shadow(color: Theme.accent.opacity(0.35), radius: 10, x: 0, y: 4)
+            Image(systemName: "sparkles")
+                .font(.system(size: 22, weight: .medium))
+                .foregroundStyle(Theme.background)
+                .frame(width: 58, height: 58)
+                .background(Theme.accent, in: Circle())
+                .shadow(color: .black.opacity(0.22), radius: 10, x: 0, y: 4)
         }
     }
 }

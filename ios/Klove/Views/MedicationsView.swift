@@ -81,7 +81,7 @@ struct MedicationsView: View {
             Button { addingMed = true } label: {
                 Label("Add medication", systemImage: "plus")
                     .font(.kloveButton).padding(.horizontal, 14).padding(.vertical, 8)
-                    .background(Theme.accent, in: Capsule()).foregroundStyle(.white)
+                    .background(Theme.accent, in: Capsule()).foregroundStyle(Theme.background)
             }
             .padding(.top, 2)
         }
@@ -173,7 +173,7 @@ struct MedicationsView: View {
                     Button { Task { await setStatus(dose, "taken") } } label: {
                         Text("Mark taken").font(.kloveButton)
                             .padding(.horizontal, 14).padding(.vertical, 7)
-                            .background(Theme.accent, in: Capsule()).foregroundStyle(.white)
+                            .background(Theme.accent, in: Capsule()).foregroundStyle(Theme.background)
                     }
                     .disabled(pendingDoseId == dose.id)
                     Menu {

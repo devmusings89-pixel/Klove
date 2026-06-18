@@ -17,48 +17,55 @@ struct SettingsView: View {
 
     var body: some View {
         List {
-            Section("Account") {
+            Section {
                 LabeledContent("Signed in as", value: email)
                 NavigationLink {
                     ProfileView()
                 } label: {
                     Label("My Info & insurance", systemImage: "person.text.rectangle")
                 }
-            }
+            } header: { sectionHeader("Account") }
+            .listRowBackground(Theme.surface)
 
             Section {
                 ConnectSourcesView(model: sources, types: sourceList, allowDisconnect: true)
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
             } header: {
-                Text("Data sources")
+                sectionHeader("Trust & data")
             } footer: {
                 Text("Connect more places Klove can pull your health data from.")
             }
 
             Section {
-                Toggle("Push notifications", isOn: $pushEnabled)
-                Picker("Remind me before visits", selection: $reminderLead) {
+                Label { Toggle("Push notifications", isOn: $pushEnabled) } icon: { Image(systemName: "bell") }
+                Picker(selection: $reminderLead) {
                     Text("1 hour").tag(1); Text("3 hours").tag(3); Text("1 day").tag(24); Text("2 days").tag(48)
-                }
+                } label: { Label("Remind me before visits", systemImage: "clock") }
             } header: {
-                Text("Notifications")
+                sectionHeader("Notifications")
             } footer: {
                 if let saveError { Text(saveError).foregroundStyle(.red) }
             }
+            .listRowBackground(Theme.surface)
 
-            Section("About") {
-                LabeledContent("Version", value: appVersion)
+            Section {
+                LabeledContent { Text(appVersion) } label: { Label("Version", systemImage: "info.circle") }
                 Text("Klove surfaces information to discuss with your provider and is not a substitute for medical advice.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+                    .font(.kloveCaption)
+                    .foregroundStyle(Theme.inkSecondary)
+            } header: { sectionHeader("Support") }
+            .listRowBackground(Theme.surface)
 
             Section {
                 Button("Sign out", role: .destructive, action: signOut)
             }
+            .listRowBackground(Theme.surface)
         }
-        .navigationTitle("Settings")
+        .scrollContentBackground(.hidden)
+        .kloveBackground()
+        .tint(Theme.accent)
+        .navigationTitle("Account")
         .task {
             await sources.loadSources()
             if let p = try? await api.getPreferences() {
@@ -94,6 +101,10 @@ struct SettingsView: View {
                 reminderLead = lastSaved.lead
             }
         }
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title).font(.kloveLabel).textCase(.uppercase).tracking(Theme.Tracking.label).foregroundStyle(Theme.inkSecondary)
     }
 
     private var sourceList: [SourceType] { [.healthkit, .gmail, .upload, .aggregator] }

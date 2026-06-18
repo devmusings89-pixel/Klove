@@ -1,355 +1,566 @@
 import SwiftUI
 import AuthenticationServices
 
-/// First-run flow: welcome → value prop → identify → connect data sources.
-/// Completion is signaled by setting the `hasOnboarded` flag, which the app root observes.
+/// First-run flow (Figma "Lō x Klove V1"): an intro carousel → passwordless account → three numbered
+/// detail steps (About You · Your Care Circle · Notifications) → into the app. Editorial monochrome.
 struct OnboardingView: View {
     @State private var model = OnboardingModel()
-    @State private var authBusy = false
-
-    private func emailAuth(signup: Bool) async {
-        authBusy = true
-        defer { authBusy = false }
-        model.identifyError = nil
-        let email = model.email.trimmingCharacters(in: .whitespaces)
-        let ok = signup
-            ? await AuthService.shared.signUpWithEmail(email, model.password)
-            : await AuthService.shared.signInWithEmail(email, model.password)
-        if !ok { model.identifyError = AuthService.shared.errorMessage }
-        // On success, AuthService sets hasOnboarded → the app root switches to MainTabView.
-    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ProgressDots(count: OnboardingModel.Step.allCases.count, current: model.step.rawValue)
-                .padding(.top, 12)
-
-            ScrollView {
-                content
-                    .padding(.horizontal, 24)
-                    .padding(.top, 24)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        Group {
+            switch model.step {
+            case .welcome: WelcomeStep(model: model)
+            case .identify: IdentifyStep(model: model)
+            case .aboutYou: AboutYouStep(model: model)
+            case .careCircle: CareCircleStep(model: model)
+            case .notifications: NotificationsStep(model: model)
             }
-
-            footer
-                .padding(.horizontal, 24)
-                .padding(.bottom, 12)
         }
+        .background(Theme.background.ignoresSafeArea())
         .animation(.snappy, value: model.step)
-        // When auth succeeds on the identify step, continue the flow (collect details) instead of
-        // jumping into the app — AuthService no longer flips hasOnboarded on sign-in.
+        // Apple/Google complete asynchronously: when a session lands on the identify step, continue
+        // into the detail steps (magic link advances itself in mock mode).
         .onChange(of: AuthService.shared.isAuthenticated) { _, signedIn in
             if signedIn, model.step == .identify { model.advance() }
         }
     }
+}
 
-    // MARK: - Step content
+// MARK: - 1 · Welcome (intro carousel)
 
-    @ViewBuilder
-    private var content: some View {
-        switch model.step {
-        case .welcome: welcome
-        case .value: value
-        case .identify: identify
-        case .aboutYou: aboutYou
-        case .family: family
-        case .connect: connect
-        case .channels: channels
-        }
-    }
+private struct WelcomeStep: View {
+    let model: OnboardingModel
+    @State private var slide = 0
 
-    private var aboutYou: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            Text("Tell us about you").font(.largeTitle.bold())
-            Text("This personalizes your records and lets Klove book visits on your behalf.")
-                .foregroundStyle(.secondary)
+    private struct Slide { let eyebrow, line1, line2, body: String }
+    // Slide 1 is the V1 design; slides 2–3 carry the same layout with the product's value props.
+    private let slides = [
+        Slide(eyebrow: "FOR THE ONES YOU CARE FOR", line1: "All your family's health,", line2: "in one place.",
+              body: "Health records, care history, and next steps all organized around the people who matter most."),
+        Slide(eyebrow: "ONE CLEAR TIMELINE", line1: "Every record,", line2: "finally together.",
+              body: "Labs, medications, conditions, and visits — pulled into one timeline you can actually read."),
+        Slide(eyebrow: "ALWAYS A STEP AHEAD", line1: "Klove handles", line2: "the busywork.",
+              body: "Reminders, prep, and booking — Klove surfaces the one next step the moment something needs you."),
+    ]
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Your name").font(.subheadline.weight(.semibold))
-                TextField("Full name", text: $model.fullName)
-                    .textContentType(.name)
-                    .textInputAutocapitalization(.words)
-                    .padding()
-                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Date of birth").font(.subheadline.weight(.semibold))
-                DatePicker("Date of birth", selection: $model.birthDate, in: ...Date(), displayedComponents: .date)
-                    .labelsHidden()
-            }
-
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Who are you setting up Klove for?").font(.subheadline.weight(.semibold))
-                ForEach(OnboardingModel.SetupScope.allCases) { scope in
-                    Button { model.setupFor = scope } label: { scopeCard(scope) }
-                        .buttonStyle(.plain)
-                }
-            }
-        }
-    }
-
-    private func scopeCard(_ scope: OnboardingModel.SetupScope) -> some View {
-        let selected = model.setupFor == scope
-        return HStack(spacing: 14) {
-            Image(systemName: scope.icon)
-                .font(.title2).foregroundStyle(selected ? Theme.accent : .secondary).frame(width: 30)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(scope.title).font(.headline).foregroundStyle(.primary)
-                Text(scope.subtitle).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer()
-            Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(selected ? Theme.accent : Color(.systemGray3))
-        }
-        .padding(14)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(selected ? Theme.accent : .clear, lineWidth: 2))
-    }
-
-    private var family: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Who are you caring for?").font(.largeTitle.bold())
-            Text("Add the family members you coordinate care for. You can add more (or invite adults) later.")
-                .foregroundStyle(.secondary)
+    var body: some View {
+        VStack(spacing: 0) {
             HStack {
-                TextField("Name (e.g. Dad, Ava)", text: $model.newMemberName).textInputAutocapitalization(.words)
-                    .padding(10).background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-                Button { Task { await model.addMember() } } label: { Image(systemName: "plus.circle.fill").font(.title2) }
-                    .disabled(model.newMemberName.trimmingCharacters(in: .whitespaces).isEmpty || model.addingMember)
+                Text("klove.").font(.system(size: 26, design: .serif)).foregroundStyle(Theme.ink)
+                Spacer()
+                Button("Sign In") { model.advance() }
+                    .font(.kloveBody).foregroundStyle(Theme.inkSecondary)
             }
-            Picker("Type", selection: $model.newMemberType) {
-                ForEach(NewMemberType.allCases) { Text($0.title).tag($0) }
-            }.pickerStyle(.segmented)
-            if !model.addedMembers.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(model.addedMembers, id: \.self) { name in
-                        Label(name, systemImage: "checkmark.circle.fill").foregroundStyle(.tint)
+            .padding(.horizontal, OnbStyle.hMargin).padding(.top, 8)
+
+            TabView(selection: $slide) {
+                ForEach(slides.indices, id: \.self) { i in
+                    let s = slides[i]
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(s.eyebrow).font(.kloveLabel).tracking(Theme.Tracking.label).foregroundStyle(Theme.inkSecondary)
+                            .padding(.top, 24)
+                        VStack(alignment: .leading, spacing: -2) {
+                            Text(s.line1).font(.kloveTitle).foregroundStyle(Theme.ink)
+                            Text(s.line2).font(.kloveTitleItalic).foregroundStyle(Theme.inkSecondary)
+                        }
+                        .padding(.top, 12)
+                        Text(s.body).font(.kloveBody).foregroundStyle(Theme.inkSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 12)
+                        RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                            .fill(Theme.surfaceSunken)
+                            .padding(.top, 24)
+                        Spacer(minLength: 0)
                     }
-                }.padding(.top, 4)
-            }
-            Text("You can skip this and add family anytime from the Family tab.")
-                .font(.footnote).foregroundStyle(.secondary)
-        }
-    }
-
-    private var channels: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("How should Klove reach you?").font(.largeTitle.bold())
-            Text("Klove sends a calm nudge only when something needs you — never a pile of unread.")
-                .foregroundStyle(.secondary)
-            Toggle(isOn: $model.pushEnabled) {
-                Label("Push notifications", systemImage: "bell.badge.fill")
-            }
-            .padding(12).background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
-            VStack(alignment: .leading, spacing: 8) {
-                Label("Text & WhatsApp — coming soon", systemImage: "message")
-                Label("Email digest — coming soon", systemImage: "envelope")
-            }
-            .font(.subheadline).foregroundStyle(.secondary)
-        }
-    }
-
-    private var welcome: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Image(systemName: "heart.text.square.fill")
-                .font(.system(size: 64))
-                .foregroundStyle(.tint)
-            Text("Welcome to Klove")
-                .font(.largeTitle.bold())
-            Text("Your health records, appointments, and the dots between them — understood in one place.")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var value: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            Text("What Klove does")
-                .font(.largeTitle.bold())
-            VStack(alignment: .leading, spacing: 20) {
-                FeatureRow(icon: "tray.full.fill", title: "All your records, together",
-                           detail: "Labs, conditions, medications, and visits in one timeline.")
-                FeatureRow(icon: "bell.badge.fill", title: "Never miss an appointment",
-                           detail: "Reminders and AI-assisted booking when you need care.")
-                FeatureRow(icon: "exclamationmark.shield.fill", title: "Things to be aware of",
-                           detail: "Surfaces out-of-range results worth discussing with your doctor.")
-                FeatureRow(icon: "point.3.connected.trianglepath.dotted", title: "Connects the dots",
-                           detail: "Finds patterns across your diagnoses and history.")
-            }
-        }
-    }
-
-    private var identify: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Let's set up your account")
-                .font(.largeTitle.bold())
-            Text("We'll use this to keep your health data private to you.")
-                .foregroundStyle(.secondary)
-
-            TextField("you@example.com", text: $model.email)
-                .keyboardType(.emailAddress)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .textContentType(.emailAddress)
-                .padding()
-                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
-
-            SecureField("Password", text: $model.password)
-                .textContentType(.password)
-                .padding()
-                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
-
-            HStack(spacing: 10) {
-                Button { Task { await emailAuth(signup: false) } } label: {
-                    Text("Sign in").font(.headline).frame(maxWidth: .infinity).frame(height: 46)
-                        .overlay(Capsule().stroke(Color(.systemGray3), lineWidth: 1))
-                }
-                Button { Task { await emailAuth(signup: true) } } label: {
-                    Text("Create account").font(.headline).frame(maxWidth: .infinity).frame(height: 46)
-                        .foregroundStyle(.white).background(Theme.accent, in: Capsule())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, OnbStyle.hMargin)
+                    .tag(i)
                 }
             }
-            .disabled(!model.email.contains("@") || model.password.count < 6 || authBusy)
+            .tabViewStyle(.page(indexDisplayMode: .never))
 
-            if let error = model.identifyError {
-                Text(error).font(.footnote).foregroundStyle(.red)
-            }
+            OnbDots(count: slides.count, current: slide).padding(.bottom, 20)
 
-            HStack { line; Text("or").font(.caption).foregroundStyle(.secondary); line }
-                .padding(.vertical, 4)
-
-            SignInWithAppleButton(.signIn) { req in
-                AuthService.shared.configure(req)
-            } onCompletion: { result in
-                AuthService.shared.handle(result)
-            }
-            .signInWithAppleButtonStyle(.black)
-            .frame(height: 48)
-            .clipShape(Capsule())
-
-            Button { Task { await AuthService.shared.signInWithGoogle() } } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "globe").font(.headline)
-                    Text("Continue with Google").font(.headline)
-                }
-                .frame(maxWidth: .infinity).frame(height: 48)
-                .foregroundStyle(.primary)
-                .overlay(Capsule().stroke(Color(.systemGray3), lineWidth: 1))
-            }
-
-            if let authError = AuthService.shared.errorMessage {
-                Text(authError).font(.footnote).foregroundStyle(.red)
-            }
-        }
-    }
-
-    private var line: some View { Rectangle().fill(Color(.systemGray4)).frame(height: 1) }
-
-    private var connect: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Import your health records")
-                .font(.largeTitle.bold())
-            Text("Connect Apple Health, a patient portal, or upload documents — you can add more anytime. Uploading a document is the quickest way to see Klove work.")
-                .foregroundStyle(.secondary)
-
-            ConnectSourcesView(model: model.sources)
-
-            Text("Your data is processed securely and is never shared without your consent. Klove surfaces information to discuss with your provider and is not a substitute for medical advice.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .padding(.top, 4)
-        }
-    }
-
-    // MARK: - Footer buttons
-
-    private var footer: some View {
-        VStack(spacing: 12) {
-            // The account step authenticates via its own Sign in / Create account
-            // actions. A generic "Continue" here would let users skip past auth, so
-            // the footer's primary button is omitted on that step — the screen offers
-            // only Log in or Register.
-            if model.step != .identify {
-                Button(action: primaryAction) {
-                    Group {
-                        if model.savingProfile { ProgressView() } else { Text(primaryTitle) }
-                    }
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
-                }
-                .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.capsule)
-                .disabled(primaryDisabled)
-            }
-
-            if model.step.isLast {
-                Button("Skip for now", action: { model.finish() })
-                    .font(.subheadline)
-            } else if model.step != .welcome, model.step != .identify {
-                Button("Back", action: { model.back() })
-                    .font(.subheadline)
-            }
-        }
-    }
-
-    private var primaryTitle: String {
-        if model.step.isLast { return "Finish" }
-        // On the family step, "Continue" reads as skippable; make the optionality explicit.
-        if model.step == .family { return model.addedMembers.isEmpty ? "Skip for now" : "Continue" }
-        return "Continue"
-    }
-
-    private var primaryDisabled: Bool {
-        if model.savingProfile { return true }
-        // Require a name before saving the profile on the About-you step.
-        if model.step == .aboutYou { return model.fullName.trimmingCharacters(in: .whitespaces).isEmpty }
-        return false
-    }
-
-    private func primaryAction() {
-        switch model.step {
-        case .aboutYou:
-            Task { await model.saveAboutYouAndAdvance() }
-        default:
-            if model.step.isLast { model.finish() } else { model.advance() }
+            Button("Get Started") { model.advance() }
+                .buttonStyle(OnbButtonStyle())
+                .padding(.horizontal, OnbStyle.hMargin).padding(.bottom, 8)
         }
     }
 }
 
-// MARK: - Small building blocks
+// MARK: - 2 · Identify (magic link)
 
-private struct ProgressDots: View {
+private struct IdentifyStep: View {
+    @Bindable var model: OnboardingModel
+    @FocusState private var emailFocused: Bool
+
+    private var canContinue: Bool {
+        model.email.contains("@") && model.email.contains(".") && model.agreedToTerms && !model.authBusy
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                OnbBackBar { model.back() }
+
+                Text("Welcome to klove").font(.kloveTitle).foregroundStyle(Theme.ink)
+                Text("Let's get your account set up.").font(.kloveBody).foregroundStyle(Theme.inkSecondary)
+
+                OnbField(label: "Email") {
+                    TextField("Enter your email", text: $model.email)
+                        .focused($emailFocused)
+                        .keyboardType(.emailAddress).textContentType(.emailAddress)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .font(.kloveBody).foregroundStyle(Theme.ink)
+                }
+                .padding(.top, 4)
+
+                // Terms agreement
+                HStack(alignment: .top, spacing: 12) {
+                    Button { model.agreedToTerms.toggle() } label: {
+                        Image(systemName: model.agreedToTerms ? "checkmark.square.fill" : "square")
+                            .font(.system(size: 24)).foregroundStyle(model.agreedToTerms ? Theme.accent : Theme.inkSecondary)
+                    }
+                    .buttonStyle(.plain)
+                    VStack(alignment: .leading, spacing: 6) {
+                        (Text("I agree to Klove's ")
+                         + Text("Terms of Service").underline()
+                         + Text(" and ")
+                         + Text("Privacy Policy").underline()
+                         + Text(". I understand that Klove helps coordinate care and does not provide medical advice."))
+                            .font(.kloveCaption).foregroundStyle(Theme.ink)
+                        Text("Your data is encrypted and never sold.").font(.kloveCaption.italic()).foregroundStyle(Theme.inkSecondary)
+                    }
+                }
+
+                if model.magicLinkSent {
+                    Text("Check your email for a link to finish signing in.")
+                        .font(.kloveCaption).foregroundStyle(Theme.ink).kloveCardSunken()
+                }
+                if let error = model.identifyError {
+                    Text(error).font(.kloveCaption).foregroundStyle(.red)
+                }
+
+                Button { Task { await model.continueWithMagicLink() } } label: {
+                    if model.authBusy { ProgressView().tint(Theme.background) } else { Text("Continue with magic link") }
+                }
+                .buttonStyle(OnbButtonStyle(enabled: canContinue))
+                .disabled(!canContinue)
+                .padding(.top, 4)
+
+                OnbOrDivider()
+
+                SignInWithAppleButton(.continue) { AuthService.shared.configure($0) }
+                    onCompletion: { AuthService.shared.handle($0) }
+                    .signInWithAppleButtonStyle(.whiteOutline)
+                    .frame(height: 54).clipShape(Capsule())
+
+                Button { Task { await AuthService.shared.signInWithGoogle() } } label: {
+                    HStack(spacing: 8) {
+                        Text("G").font(.system(size: 17, weight: .bold, design: .serif)).foregroundStyle(Theme.inkSecondary)
+                        Text("Continue with Google").font(.kloveButton).foregroundStyle(Theme.ink)
+                    }
+                    .frame(maxWidth: .infinity).frame(height: 54)
+                    .overlay(Capsule().stroke(Theme.hairline, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+
+                if let authError = AuthService.shared.errorMessage, model.identifyError == nil {
+                    Text(authError).font(.kloveCaption).foregroundStyle(.red)
+                }
+            }
+            .padding(.horizontal, OnbStyle.hMargin).padding(.top, 8).padding(.bottom, 24)
+        }
+    }
+}
+
+// MARK: - 3 · About You
+
+private struct AboutYouStep: View {
+    @Bindable var model: OnboardingModel
+    @State private var showDOB = false
+    @State private var tempDOB = Calendar.current.date(byAdding: .year, value: -40, to: Date()) ?? Date()
+
+    private var dobText: String {
+        guard let d = model.birthDate else { return "DD/MM/YYYY" }
+        let f = DateFormatter(); f.dateFormat = "dd/MM/yyyy"; return f.string(from: d)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            OnbProgress(title: "About You", step: 1) { model.back() }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    OnbDisplay(line1: "First, a little", line2: "about you.")
+                        .padding(.top, 24)
+                    Text("We'll use these details to personalize your experience and help organize your records.")
+                        .font(.kloveBody).foregroundStyle(Theme.inkSecondary)
+                        .fixedSize(horizontal: false, vertical: true).padding(.top, 12)
+
+                    OnbField(label: "Full name") {
+                        TextField("Your name", text: $model.fullName)
+                            .textContentType(.name).textInputAutocapitalization(.words)
+                            .font(.kloveBody).foregroundStyle(Theme.ink)
+                    }
+                    .padding(.top, 28)
+
+                    Button { tempDOB = model.birthDate ?? tempDOB; showDOB = true } label: {
+                        OnbField(label: "Date of birth") {
+                            Text(dobText).font(.kloveBody)
+                                .foregroundStyle(model.birthDate == nil ? Theme.inkSecondary : Theme.ink)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 12)
+
+                    Spacer(minLength: 40)
+                }
+                .padding(.horizontal, OnbStyle.hMargin)
+            }
+
+            Button { Task { await model.saveAboutYouAndAdvance() } } label: {
+                if model.savingProfile { ProgressView().tint(Theme.background) } else { Text("Continue") }
+            }
+            .buttonStyle(OnbButtonStyle(enabled: model.aboutYouComplete && !model.savingProfile))
+            .disabled(!model.aboutYouComplete || model.savingProfile)
+            .padding(.horizontal, OnbStyle.hMargin).padding(.bottom, 8)
+        }
+        .sheet(isPresented: $showDOB) {
+            NavigationStack {
+                DatePicker("Date of birth", selection: $tempDOB, in: ...Date(), displayedComponents: .date)
+                    .datePickerStyle(.graphical).labelsHidden().padding()
+                    .navigationTitle("Date of birth").navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { model.birthDate = tempDOB; showDOB = false }
+                        }
+                    }
+                    .tint(Theme.accent)
+            }
+            .presentationDetents([.medium])
+        }
+    }
+}
+
+// MARK: - 4 · Your Care Circle
+
+private struct CareCircleStep: View {
+    @Bindable var model: OnboardingModel
+    @State private var showAdd = false
+    @State private var pendingInvite: AddMemberResponse?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            OnbProgress(title: "Your Care Circle", step: 2) { model.back() }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    OnbDisplay(line1: "Who else", line2: "do you care for?")
+                        .padding(.top, 24)
+                    Text("Add people whose health you help manage. You can always come back later.")
+                        .font(.kloveBody).foregroundStyle(Theme.inkSecondary)
+                        .fixedSize(horizontal: false, vertical: true).padding(.top, 12)
+
+                    VStack(spacing: Theme.Spacing.md) {
+                        ForEach(model.store.members) { m in
+                            CareCircleRow(member: m, age: m.memberType == "self" ? model.operatorAge : nil)
+                        }
+                        Button { showAdd = true } label: { addMemberRow }.buttonStyle(.plain)
+                    }
+                    .padding(.top, 28)
+
+                    Spacer(minLength: 40)
+                }
+                .padding(.horizontal, OnbStyle.hMargin)
+            }
+
+            VStack(spacing: 14) {
+                Button("Continue") { model.advance() }.buttonStyle(OnbButtonStyle())
+                Button("Skip") { model.advance() }.font(.kloveBodyStrong).foregroundStyle(Theme.ink)
+            }
+            .padding(.horizontal, OnbStyle.hMargin).padding(.bottom, 8)
+        }
+        .task { if model.store.members.isEmpty { await model.store.load() } }
+        .sheet(isPresented: $showAdd, onDismiss: {
+            if let adult = pendingInvite { pendingInvite = nil }
+            Task { await model.store.load() }
+        }) {
+            AddMemberView(onInvite: { pendingInvite = $0 }).environment(model.store)
+        }
+        .sheet(item: $pendingInvite) { adult in
+            InviteMemberView(memberId: adult.userId, memberName: adult.displayName ?? "this member").environment(model.store)
+        }
+    }
+
+    private var addMemberRow: some View {
+        HStack(spacing: Theme.Spacing.md) {
+            Image(systemName: "plus").font(.system(size: 18, weight: .medium)).foregroundStyle(Theme.ink)
+                .frame(width: 44, height: 44).overlay(Circle().stroke(Theme.hairline, lineWidth: 1))
+            Text("Add a member").font(.kloveBodyStrong).foregroundStyle(Theme.ink)
+            Spacer()
+        }
+        .padding(Theme.Spacing.lg)
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous).stroke(Theme.hairline, lineWidth: 1))
+    }
+}
+
+private struct CareCircleRow: View {
+    let member: HouseholdMember
+    let age: Int?
+
+    var body: some View {
+        HStack(spacing: Theme.Spacing.md) {
+            Text(kloveInitials(member.name))
+                .font(.system(size: 18, design: .serif)).foregroundStyle(Theme.ink)
+                .frame(width: 44, height: 44).overlay(Circle().stroke(Theme.hairline, lineWidth: 1))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(member.name).font(.kloveBodyStrong).foregroundStyle(Theme.ink)
+                Text(subtitle).font(.kloveCaption).foregroundStyle(Theme.inkSecondary)
+            }
+            Spacer()
+            HStack(spacing: 5) {
+                Circle().fill(Theme.inkSecondary).frame(width: 6, height: 6)
+                Text(statusLabel).font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.ink)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(Theme.surfaceSunken, in: Capsule())
+            Image(systemName: "chevron.right").font(.caption).foregroundStyle(Theme.inkSecondary)
+        }
+        .kloveCard()
+    }
+
+    private var subtitle: String {
+        if member.memberType == "self" { return age.map { "You · \($0)" } ?? "You" }
+        switch member.memberType {
+        case "minor": return "Child · you manage"
+        case "aging_parent": return "Parent · delegated"
+        default: return member.consent == "pending" ? "Invite pending" : "Adult · shared"
+        }
+    }
+    private var statusLabel: String {
+        switch member.consent {
+        case "pending": return "Pending"
+        case "revoked": return "Revoked"
+        default: return "Active"
+        }
+    }
+}
+
+// MARK: - 5 · Notifications
+
+private struct NotificationsStep: View {
+    @Bindable var model: OnboardingModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            OnbProgress(title: "Notifications", step: 3) { model.back() }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    OnbDisplay(line1: "How should", line2: "I reach you?")
+                        .padding(.top, 24)
+                    Text("Choose how you'd like to receive important updates. We only reach out when something needs your attention. Your information stays private and is never sold.")
+                        .font(.kloveBody).foregroundStyle(Theme.inkSecondary)
+                        .fixedSize(horizontal: false, vertical: true).padding(.top, 12)
+
+                    VStack(spacing: 0) {
+                        channelRow("Push notifications", "Pushed to your device immediately", $model.pushEnabled)
+                        channelRow("Text Messages", "Messages sent to your phone", $model.textEnabled)
+                        whatsAppRow
+                        channelRow("Email", "Messages sent to your inbox", $model.emailEnabled)
+                    }
+                    .padding(.top, 28)
+
+                    Spacer(minLength: 40)
+                }
+                .padding(.horizontal, OnbStyle.hMargin)
+            }
+
+            Button { Task { await model.finishWithNotifications() } } label: {
+                if model.savingProfile { ProgressView().tint(Theme.background) } else { Text("Done") }
+            }
+            .buttonStyle(OnbButtonStyle())
+            .disabled(model.savingProfile)
+            .padding(.horizontal, OnbStyle.hMargin).padding(.bottom, 8)
+        }
+    }
+
+    private func channelRow(_ title: String, _ subtitle: String, _ isOn: Binding<Bool>) -> some View {
+        HStack(spacing: Theme.Spacing.md) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.kloveBodyStrong).foregroundStyle(Theme.ink)
+                Text(subtitle).font(.kloveCaption).foregroundStyle(Theme.inkSecondary)
+            }
+            Spacer()
+            Text(isOn.wrappedValue ? "On" : "Off").font(.kloveCaption).foregroundStyle(Theme.inkSecondary)
+            Toggle("", isOn: isOn).labelsHidden().tint(Theme.accent)
+        }
+        .padding(.vertical, 14)
+    }
+
+    /// WhatsApp is the agentic channel: turning it on reveals a phone field that enrolls the number
+    /// (POST /whatsapp/enroll) so the concierge agent can take over once the user replies YES.
+    private var whatsAppRow: some View {
+        let bind = Binding(
+            get: { model.whatsappEnabled },
+            set: { on in
+                model.whatsappEnabled = on
+                if !on { model.disconnectWhatsApp() }
+            }
+        )
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: Theme.Spacing.md) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("WhatsApp").font(.kloveBodyStrong).foregroundStyle(Theme.ink)
+                    Text("Messages through WhatsApp").font(.kloveCaption).foregroundStyle(Theme.inkSecondary)
+                }
+                Spacer()
+                Text(model.whatsappEnabled ? "On" : "Off").font(.kloveCaption).foregroundStyle(Theme.inkSecondary)
+                Toggle("", isOn: bind).labelsHidden().tint(Theme.accent)
+            }
+
+            if model.whatsappEnabled {
+                if model.whatsappEnroll == .sent {
+                    Label("We messaged you on WhatsApp. Reply YES to connect.", systemImage: "checkmark.circle")
+                        .font(.kloveCaption).foregroundStyle(Theme.ink)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14).padding(.vertical, 10)
+                        .background(Theme.surfaceSunken, in: RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
+                } else {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        TextField("+1 (555) 123-4567", text: $model.whatsappPhone)
+                            .keyboardType(.phonePad).textContentType(.telephoneNumber)
+                            .font(.kloveBody).foregroundStyle(Theme.ink)
+                            .padding(.horizontal, 14).padding(.vertical, 11)
+                            .background(Theme.surface, in: Capsule())
+                            .overlay(Capsule().stroke(Theme.hairline, lineWidth: 1))
+                        Button { Task { await model.connectWhatsApp() } } label: {
+                            if model.whatsappEnroll == .enrolling {
+                                ProgressView().tint(Theme.background).frame(width: 76, height: 42)
+                            } else {
+                                Text("Connect").font(.kloveButton).foregroundStyle(Theme.background)
+                                    .frame(width: 76, height: 42)
+                            }
+                        }
+                        .background(Theme.accent, in: Capsule())
+                        .disabled(model.whatsappEnroll == .enrolling)
+                    }
+                    if case .failed(let msg) = model.whatsappEnroll {
+                        Text(msg).font(.kloveCaption).foregroundStyle(.red)
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 14)
+    }
+}
+
+// MARK: - Shared onboarding building blocks
+
+private enum OnbStyle { static let hMargin: CGFloat = 24 }
+
+/// Full-width ink capsule CTA; renders a flat grey when disabled (the Figma "inactive" state).
+private struct OnbButtonStyle: ButtonStyle {
+    var enabled: Bool = true
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.kloveButton).foregroundStyle(Theme.background)
+            .frame(maxWidth: .infinity).padding(.vertical, 18)
+            .background(enabled ? Theme.accent : Theme.inkSecondary, in: Capsule())
+            .opacity(configuration.isPressed ? 0.85 : 1)
+    }
+}
+
+/// Field shell: tracked-caps label above an inset value/control, on a white rounded card.
+private struct OnbField<Content: View>: View {
+    let label: String
+    @ViewBuilder var content: Content
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label).font(.kloveLabel).textCase(.uppercase).tracking(Theme.Tracking.label).foregroundStyle(Theme.inkSecondary)
+            content
+        }
+        .padding(.horizontal, 18).padding(.vertical, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous).stroke(Theme.hairline, lineWidth: 1))
+    }
+}
+
+/// Two-line serif display heading (line 2 italic grey) used on every detail step.
+private struct OnbDisplay: View {
+    let line1: String
+    let line2: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: -2) {
+            Text(line1).font(.kloveTitle).foregroundStyle(Theme.ink)
+            Text(line2).font(.kloveTitleItalic).foregroundStyle(Theme.inkSecondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Centered step title + "STEP X OF 3" + a three-segment progress bar, with a back chevron.
+private struct OnbProgress: View {
+    let title: String
+    let step: Int
+    var onBack: () -> Void
+    var body: some View {
+        VStack(spacing: 12) {
+            ZStack {
+                VStack(spacing: 2) {
+                    Text(title).font(.kloveBodyStrong).foregroundStyle(Theme.ink)
+                    Text("STEP \(step) OF 3").font(.system(size: 11, weight: .semibold)).tracking(1.2).foregroundStyle(Theme.inkSecondary)
+                }
+                HStack {
+                    Button(action: onBack) { Image(systemName: "chevron.left").font(.system(size: 18, weight: .medium)).foregroundStyle(Theme.ink) }
+                    Spacer()
+                }
+            }
+            HStack(spacing: 8) {
+                ForEach(0..<3, id: \.self) { i in
+                    Capsule().fill(i < step ? Theme.accent : Theme.ink.opacity(0.12)).frame(height: 5)
+                }
+            }
+        }
+        .padding(.horizontal, OnbStyle.hMargin).padding(.top, 8)
+    }
+}
+
+/// A bare back chevron bar (welcome/identify don't show the step progress).
+private struct OnbBackBar: View {
+    var onBack: () -> Void
+    var body: some View {
+        HStack {
+            Button(action: onBack) { Image(systemName: "chevron.left").font(.system(size: 18, weight: .medium)).foregroundStyle(Theme.ink) }
+            Spacer()
+        }
+    }
+}
+
+/// Paged carousel dots — active dot is an elongated ink capsule.
+private struct OnbDots: View {
     let count: Int
     let current: Int
-
     var body: some View {
         HStack(spacing: 8) {
             ForEach(0..<count, id: \.self) { i in
-                Capsule()
-                    .fill(i == current ? Theme.accent : Color(.systemGray4))
+                Capsule().fill(i == current ? Theme.accent : Theme.ink.opacity(0.18))
                     .frame(width: i == current ? 22 : 7, height: 7)
             }
         }
     }
 }
 
-private struct FeatureRow: View {
-    let icon: String
-    let title: String
-    let detail: String
-
+/// "OR" divider with hairlines.
+private struct OnbOrDivider: View {
     var body: some View {
-        HStack(alignment: .top, spacing: 16) {
-            Image(systemName: icon)
-                .font(.title2)
-                .foregroundStyle(.tint)
-                .frame(width: 32)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.headline)
-                Text(detail).font(.subheadline).foregroundStyle(.secondary)
-            }
+        HStack(spacing: 12) {
+            Rectangle().fill(Theme.hairline).frame(height: 1)
+            Text("OR").font(.kloveLabel).tracking(Theme.Tracking.label).foregroundStyle(Theme.inkSecondary)
+            Rectangle().fill(Theme.hairline).frame(height: 1)
         }
+        .padding(.vertical, 4)
     }
 }

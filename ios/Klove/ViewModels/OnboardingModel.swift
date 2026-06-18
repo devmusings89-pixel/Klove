@@ -3,75 +3,135 @@ import Foundation
 @MainActor
 @Observable
 final class OnboardingModel {
-    /// Ordered onboarding steps. After signing in, we collect the user's own details, who they're
-    /// setting up for, the family they manage, and the health records to import.
+    /// V1 onboarding (Figma "Lō x Klove V1"): an intro carousel, a passwordless account step, then
+    /// three numbered detail steps — About You · Your Care Circle · Notifications — and into the app.
     enum Step: Int, CaseIterable {
-        case welcome, value, identify, aboutYou, family, connect, channels
+        case welcome, identify, aboutYou, careCircle, notifications
 
-        var isLast: Bool { self == Step.allCases.last }
-    }
+        var isLast: Bool { self == .notifications }
 
-    /// Who the operator is setting Klove up for — gates whether we ask about family members.
-    enum SetupScope: String, CaseIterable, Identifiable {
-        case myself, family
-        var id: String { rawValue }
-        var title: String { self == .myself ? "Just me" : "Me & my family" }
-        var subtitle: String {
-            self == .myself
-                ? "Track your own records, appointments, and medications."
-                : "Also coordinate care for kids, a partner, or aging parents."
+        /// 1-based position within the three "STEP X OF 3" detail screens (nil for welcome/identify).
+        var detailStep: Int? {
+            switch self {
+            case .aboutYou: return 1
+            case .careCircle: return 2
+            case .notifications: return 3
+            default: return nil
+            }
         }
-        var icon: String { self == .myself ? "person.fill" : "person.2.fill" }
+        /// Centered nav title shown above the progress bar on the detail steps.
+        var detailTitle: String? {
+            switch self {
+            case .aboutYou: return "About You"
+            case .careCircle: return "Your Care Circle"
+            case .notifications: return "Notifications"
+            default: return nil
+            }
+        }
     }
 
     var step: Step = .welcome
+
+    // Identify (magic link)
     var email: String = UserDefaults.standard.string(forKey: AppStorageKey.userEmail) ?? ""
-    var password: String = ""
+    var agreedToTerms = true
+    var magicLinkSent = false
+    var authBusy = false
     var identifyError: String?
 
-    // About-you step
+    // About you
     var fullName = ""
-    var birthDate = Calendar.current.date(byAdding: .year, value: -40, to: Date()) ?? Date()
-    var setupFor: SetupScope = .myself
+    /// nil until the user picks a date — the field shows the DD/MM/YYYY placeholder until then.
+    var birthDate: Date?
     var savingProfile = false
 
-    /// Source connection is shared with Settings via SourcesModel.
-    let sources = SourcesModel()
-    private let api = APIClient()
+    // Care circle — reuses the real household roster (operator + added members).
+    let store = HouseholdStore()
 
-    // Family step
-    var newMemberName = ""
-    var newMemberType: NewMemberType = .minor
-    var addedMembers: [String] = []
-    var addingMember = false
-
-    // Channels step
+    // Notifications
     var pushEnabled = true
+    var textEnabled = true
+    var whatsappEnabled = false   // off until a number is connected (the agentic channel needs enroll)
+    var emailEnabled = true
+
+    // WhatsApp enrollment — links a number to the concierge agent (POST /whatsapp/enroll).
+    var whatsappPhone = ""
+    enum WhatsAppEnroll: Equatable { case idle, enrolling, sent, failed(String) }
+    var whatsappEnroll: WhatsAppEnroll = .idle
+
+    private let api = APIClient()
 
     init() {
         // Resume cleanly: a user who authenticated but didn't finish onboarding (e.g. force-quit)
-        // shouldn't be made to re-authenticate — drop them at the details step.
+        // shouldn't re-authenticate — drop them at the first detail step.
         if AuthService.shared.isAuthenticated || AuthService.shared.isSignedIn {
             step = .aboutYou
             Task { await prefillProfile() }
         }
     }
 
-    // MARK: - Navigation
+    // MARK: - Derived
 
-    func advance() {
-        if step == .identify, !saveIdentity() { return }
-        goToNext()
+    /// Whole years from the entered DOB — shown as "You · 50" in the care circle.
+    var operatorAge: Int? {
+        guard let birthDate else { return nil }
+        return Calendar.current.dateComponents([.year], from: birthDate, to: Date()).year
     }
 
-    /// Save the user's own details, then continue (skipping the family step when it's just them).
+    var aboutYouComplete: Bool {
+        !fullName.trimmingCharacters(in: .whitespaces).isEmpty && birthDate != nil
+    }
+
+    // MARK: - Navigation
+
+    func advance() { goToNext() }
+
+    func back() {
+        guard let prev = Step(rawValue: step.rawValue - 1) else { return }
+        step = prev
+    }
+
+    private func goToNext() {
+        guard let next = Step(rawValue: step.rawValue + 1) else { return }
+        step = next
+        if step == .careCircle { Task { await store.load() } }
+    }
+
+    // MARK: - Identify
+
+    /// Send the magic link / establish identity, then advance to About You.
+    func continueWithMagicLink() async {
+        authBusy = true
+        defer { authBusy = false }
+        identifyError = nil
+        guard agreedToTerms else {
+            identifyError = "Please accept the Terms to continue."
+            return
+        }
+        if await AuthService.shared.sendMagicLink(email) {
+            // Mock/dev: identity is set → continue. Live: link emailed; show a confirmation but the
+            // session completes via the deep-link callback.
+            if AuthService.shared.isSignedIn {
+                goToNext()
+            } else {
+                magicLinkSent = true
+            }
+        } else {
+            identifyError = AuthService.shared.errorMessage
+        }
+    }
+
+    // MARK: - About you
+
+    /// Save the user's own details (name + DOB), then continue.
     func saveAboutYouAndAdvance() async {
+        guard aboutYouComplete else { return }
         savingProfile = true
         defer { savingProfile = false }
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.timeZone = TimeZone(identifier: "UTC")
         _ = try? await api.putProfile(
             fullName: fullName.trimmingCharacters(in: .whitespaces),
-            dob: f.string(from: birthDate),
+            dob: birthDate.map { f.string(from: $0) },
             phone: nil,
             email: email.isEmpty ? nil : email,
             address: nil,
@@ -79,15 +139,7 @@ final class OnboardingModel {
         goToNext()
     }
 
-    private func goToNext() {
-        guard var next = Step(rawValue: step.rawValue + 1) else { return }
-        // No family to add when setting up for just yourself — skip straight to records.
-        if next == .family, setupFor == .myself { next = .connect }
-        step = next
-        if step == .connect { Task { await sources.loadSources() } }
-    }
-
-    /// Prefill the name/DOB from an existing profile so returning users don't retype.
+    /// Prefill name/DOB from an existing profile so returning users don't retype.
     private func prefillProfile() async {
         guard fullName.isEmpty else { return }
         guard let p = try? await api.getProfile() else { return }
@@ -98,58 +150,43 @@ final class OnboardingModel {
         }
     }
 
-    /// Add a family member during onboarding (operator identity was set in the identify step).
-    func addMember() async {
-        let name = newMemberName.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { return }
-        addingMember = true
-        defer { addingMember = false }
-        if (try? await api.addMember(displayName: name, type: newMemberType)) != nil {
-            addedMembers.append(name)
-            newMemberName = ""
-        }
+    // MARK: - Notifications
+
+    /// Persist the notification preferences (push is backend-backed; the other channels are captured
+    /// for when their delivery lands) and finish onboarding.
+    func finishWithNotifications() async {
+        savingProfile = true
+        defer { savingProfile = false }
+        _ = try? await api.updatePreferences(pushEnabled: pushEnabled, reminderLeadHours: 24)
+        finish()
     }
-
-    func back() {
-        guard var prev = Step(rawValue: step.rawValue - 1) else { return }
-        // Mirror the forward skip: don't land on the family step when it's just them.
-        if prev == .family, setupFor == .myself { prev = .aboutYou }
-        step = prev
-    }
-
-    // MARK: - Identity
-
-    /// True when the app is wired to real auth (Supabase). In that case the bare email-entry path is
-    /// not a valid identity — the user must authenticate (Apple/Google/email+password) to get a JWT.
-    private var requiresRealAuth: Bool { !Config.supabaseURL.isEmpty && !Config.supabaseAnonKey.isEmpty }
-
-    private func saveIdentity() -> Bool {
-        // Live build: typing an email alone must not count as being signed in. Require a real token
-        // obtained via one of the auth flows (which store an authToken in the Keychain).
-        if requiresRealAuth {
-            guard AuthService.shared.isSignedIn else {
-                identifyError = "Please sign in with Apple, Google, or email and password to continue."
-                return false
-            }
-            identifyError = nil
-            return true
-        }
-
-        // Mock/dev build: a valid email is a sufficient stable identity (sent via x-user-email).
-        let trimmed = email.trimmingCharacters(in: .whitespaces)
-        guard trimmed.contains("@"), trimmed.contains(".") else {
-            identifyError = "Enter a valid email."
-            return false
-        }
-        identifyError = nil
-        email = trimmed
-        UserDefaults.standard.set(trimmed, forKey: AppStorageKey.userEmail)
-        return true
-    }
-
-    // MARK: - Finish
 
     func finish() {
         UserDefaults.standard.set(true, forKey: AppStorageKey.hasOnboarded)
+    }
+
+    // MARK: - WhatsApp
+
+    /// Link the entered number to the concierge agent. The backend sends a "reply YES" verification;
+    /// the inbound webhook flips the channel to verified, after which the agent handles WhatsApp chats.
+    func connectWhatsApp() async {
+        let phone = whatsappPhone.trimmingCharacters(in: .whitespaces)
+        guard phone.filter(\.isNumber).count >= 7 else {
+            whatsappEnroll = .failed("Enter a valid phone number.")
+            return
+        }
+        whatsappEnroll = .enrolling
+        do {
+            _ = try await api.enrollWhatsApp(phone: phone)
+            whatsappEnroll = .sent
+        } catch {
+            whatsappEnroll = .failed("Couldn't connect WhatsApp. Please try again.")
+        }
+    }
+
+    /// Turn the WhatsApp channel off and unlink the number.
+    func disconnectWhatsApp() {
+        whatsappEnroll = .idle
+        Task { _ = try? await api.disableWhatsApp() }
     }
 }

@@ -10,22 +10,27 @@ struct ShowMeView: View {
     @State private var query = ""
     @State private var result: ShowMeResult?
     @State private var loading = false
+    @State private var adding = false
+    @State private var added = false
     private let api = APIClient()
 
+    private var firstName: String { String(memberName.split(separator: " ").first ?? "their") }
     private var prompts: [String] {
         ["Blood pressure", "Recent labs", "Medications", "Upcoming visits"]
     }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                 HStack {
                     TextField("Show me…", text: $query)
-                        .textFieldStyle(.plain).padding(12)
-                        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+                        .textFieldStyle(.plain).font(.kloveBody).padding(12)
+                        .background(Theme.surface, in: Capsule())
+                        .overlay(Capsule().stroke(Theme.hairline, lineWidth: 1))
                         .onSubmit { Task { await run() } }
                     Button { Task { await run() } } label: {
-                        Image(systemName: "magnifyingglass.circle.fill").font(.title).foregroundStyle(Theme.accent)
+                        Image(systemName: "arrow.up").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.background)
+                            .frame(width: 40, height: 40).background(query.isEmpty ? Theme.inkSecondary : Theme.accent, in: Circle())
                     }.disabled(query.isEmpty || loading)
                 }
 
@@ -35,48 +40,67 @@ struct ShowMeView: View {
                     ProgressView().frame(maxWidth: .infinity).padding(.top, 30)
                 } else if let r = result {
                     if let summary = r.summary, !summary.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Label("Klove", systemImage: "sparkles").font(.caption.weight(.semibold)).foregroundStyle(Theme.accent)
-                            Text(summary).font(.subheadline).foregroundStyle(Theme.ink)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .kloveCard()
+                        Text(summary).font(.kloveBody).foregroundStyle(Theme.ink)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16).padding(.vertical, 12)
+                            .background(Theme.surfaceSunken, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                     }
                     if let s = r.series { trendChart(s) }
                     if r.entries.isEmpty && r.series == nil {
-                        Text("Nothing on file for \"\(r.title)\" yet.").font(.subheadline).foregroundStyle(Theme.inkSecondary).kloveCard()
+                        Text("Nothing on file for \"\(r.title)\" yet.").font(.kloveBody).foregroundStyle(Theme.inkSecondary).kloveCard()
                     } else if !r.entries.isEmpty {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("\(r.count) result\(r.count == 1 ? "" : "s") for \"\(r.title)\"")
-                                .font(.caption).foregroundStyle(Theme.inkSecondary)
+                        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                            SectionLabel(title: "\(r.count) result\(r.count == 1 ? "" : "s") for \(r.title)")
                             ForEach(r.entries) { e in
-                                HStack(spacing: 10) {
-                                    Image(systemName: e.symbol).foregroundStyle(Theme.accent).frame(width: 24)
+                                HStack(spacing: Theme.Spacing.md) {
+                                    AvatarChip(initials: kloveInitials(memberName), symbol: e.symbol, size: 40)
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text(e.title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
-                                        if let d = e.detail { Text(d).font(.caption).foregroundStyle(Theme.inkSecondary) }
+                                        Text(e.title).font(.kloveBodyStrong).foregroundStyle(Theme.ink)
+                                        if let d = e.detail { Text(d).font(.kloveCaption).foregroundStyle(Theme.inkSecondary) }
                                     }
                                     Spacer()
-                                    Text(e.displayDate).font(.caption2).foregroundStyle(Theme.inkSecondary)
+                                    Text(e.displayDate).font(.kloveCaption).foregroundStyle(Theme.inkSecondary)
                                 }
                                 .kloveCard()
                             }
                         }
                     }
+
+                    if hasContent(r) {
+                        Button { Task { await addToBrief(r) } } label: {
+                            Label(added ? "Added to \(firstName)'s brief" : "Add to \(firstName)'s brief",
+                                  systemImage: added ? "checkmark" : "plus")
+                        }
+                        .buttonStyle(KlovePrimaryButtonStyle())
+                        .disabled(adding || added)
+                        .padding(.top, Theme.Spacing.xs)
+                    }
                 }
             }
-            .padding(20)
+            .padding(Theme.Spacing.xl)
         }
         .background(Theme.background.ignoresSafeArea())
         .navigationTitle("Show me · \(memberName)")
         .navigationBarTitleDisplayMode(.inline)
     }
 
+    private func hasContent(_ r: ShowMeResult) -> Bool {
+        (r.summary?.isEmpty == false) || !r.entries.isEmpty || r.series != nil
+    }
+
     private func run() async {
         guard !query.isEmpty else { return }
         loading = true
+        added = false
         defer { loading = false }
         result = try? await api.showMe(memberId, query: query)
+    }
+
+    private func addToBrief(_ r: ShowMeResult) async {
+        adding = true
+        defer { adding = false }
+        let detail = r.summary ?? r.entries.first?.detail
+        if (try? await api.addToBrief(memberId, title: r.title, detail: detail)) != nil { added = true }
     }
 
     private func trendChart(_ s: ShowMeSeries) -> some View {

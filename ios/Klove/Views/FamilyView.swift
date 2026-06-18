@@ -25,11 +25,11 @@ struct FamilyView: View {
 
                     Button { showAdd = true } label: {
                         Label("Add a family member", systemImage: "plus.circle.fill")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Theme.accent)
+                            .font(.kloveBodyStrong)
+                            .foregroundStyle(Theme.ink)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
-                            .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
+                            .background(Theme.surfaceSunken, in: RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
                     }
                     .padding(.top, 4)
                 }
@@ -38,7 +38,7 @@ struct FamilyView: View {
         }
         .background(Theme.background.ignoresSafeArea())
         .contentMargins(.bottom, 80, for: .scrollContent)
-        .navigationTitle("Family")
+        .navigationTitle("Household")
         .navigationDestination(for: HouseholdMember.self) { member in
             MemberProfileView(memberId: member.userId)
         }
@@ -60,16 +60,12 @@ private struct MemberCard: View {
     let member: HouseholdMember
 
     var body: some View {
-        HStack(spacing: 14) {
-            Image(systemName: member.symbol)
-                .font(.title2)
-                .foregroundStyle(Theme.accent)
-                .frame(width: 44, height: 44)
-                .background(Theme.accentSoft, in: Circle())
+        HStack(spacing: Theme.Spacing.md) {
+            AvatarChip(initials: kloveInitials(member.name), symbol: member.symbol, size: 44)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(member.displayLabel).font(.headline).foregroundStyle(Theme.ink)
-                Text(relationshipLabel).font(.caption).foregroundStyle(Theme.inkSecondary)
+                Text(member.displayLabel).font(.kloveBodyStrong).foregroundStyle(Theme.ink)
+                Text(relationshipLabel).font(.kloveCaption).foregroundStyle(Theme.inkSecondary)
             }
 
             Spacer()
@@ -77,9 +73,9 @@ private struct MemberCard: View {
             if member.needsYou > 0 {
                 Text("\(member.needsYou)")
                     .font(.caption.weight(.bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.background)
                     .frame(minWidth: 22, minHeight: 22)
-                    .background(Theme.needsYou, in: Circle())
+                    .background(Theme.accent, in: Circle())
             } else {
                 consentBadge
             }

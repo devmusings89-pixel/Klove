@@ -124,25 +124,18 @@ struct ChooseTimeHint: View {
 }
 
 /// Status chip. Booking tasks read "Confirmed"/"Hold"; other tasks show their workflow state.
+/// A provisional hold is emphasized (ink fill) to draw the eye; everything else is a quiet grey chip.
 struct TaskStatusPill: View {
     let task: KloveTask
     private var label: String {
         if let b = task.booking { return b.verified ? "Confirmed" : "Hold" }
-        return task.state.replacingOccurrences(of: "_", with: " ").capitalized
+        return task.state.replacingOccurrences(of: "_", with: " ")
     }
-    private var color: Color {
-        if let b = task.booking { return b.verified ? Theme.handled : Theme.needsYou }
-        switch task.state {
-        case "handled": return Theme.handled
-        case "waiting": return Theme.waiting
-        default: return Theme.needsYou
-        }
+    private var emphasized: Bool {
+        if let b = task.booking { return !b.verified }
+        return task.state == "needs_you"
     }
     var body: some View {
-        Text(label)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 10).padding(.vertical, 4)
-            .background(color, in: Capsule())
+        StatusChip(text: label, emphasized: emphasized)
     }
 }
