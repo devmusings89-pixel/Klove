@@ -11,6 +11,18 @@ primary_region = "iad"
 [env]
   PORT = "8080"
   PUBLIC_BASE_URL = "https://api.klovehealth.com"
+  WHATSAPP_TRANSPORT = "baileys"
+  # Baileys WhatsApp session creds live on the persistent volume (see [mounts]) so the dedicated
+  # Klove number stays paired across deploys/restarts. First deploy prints a QR in `fly logs` to scan.
+  BAILEYS_AUTH_DIR = "/data/baileys-auth"
+
+# Persistent volume for the WhatsApp (Baileys) session credentials. Create once before first deploy:
+#   fly volumes create klove_data --region iad --size 1 -a klove-backend
+# Keep the app to a SINGLE machine — Baileys is one socket per number; multiple machines would each
+# try to connect and duplicate. (One volume naturally pins one machine.)
+[mounts]
+  source = "klove_data"
+  destination = "/data"
 
 [http_service]
   internal_port = 8080
