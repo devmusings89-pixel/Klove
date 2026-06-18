@@ -242,7 +242,9 @@ struct StatusBadge: View {
 
     private var label: String {
         switch status {
-        case "calling": return "Calling…"
+        case "calling": return "Dialing…"
+        case "ringing": return "Ringing…"
+        case "in_call": return "On the call…"
         case "awaiting_choice": return "Options ready"
         case "awaiting_info": return "Info needed"
         case "awaiting_verification": return "Code needed"
@@ -260,7 +262,8 @@ struct StatusBadge: View {
     private var color: Color {
         switch status {
         case "booked", "transferred": return Theme.handled
-        case "calling": return .blue
+        case "calling", "ringing": return .blue
+        case "in_call": return .green
         case "awaiting_choice": return .purple
         case "awaiting_info", "provisional", "voicemail": return Theme.needsYou
         case "awaiting_verification": return .indigo

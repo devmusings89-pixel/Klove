@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { prisma } from "../db.js";
 import { config, enabled, isProduction } from "../config.js";
 import { constructWebhookEvent } from "../services/stripe.js";
-import { placeNextCall, recordCallResult } from "../services/orchestrator.js";
+import { placeNextCall, recordCallResult, ACTIVE_CALL_STATES } from "../services/orchestrator.js";
 import { reconcileConciergeJobs } from "../services/concierge.js";
 import type { CallStructuredData } from "../types.js";
 import { gmailSource } from "../sources/gmail.js";
@@ -55,9 +55,15 @@ export async function webhookRoutes(app: FastifyInstance) {
     if (!msg) return reply.send({ received: true });
 
     if (msg.type === "status-update" && msg.call?.id) {
-      // Reflect ringing/in-progress on the matching target without finalizing it.
+      // Refine an active call's status so the live "theater" can show dialing → ringing → on-call
+      // instead of a single opaque "calling". Only refine a still-active target — never overwrite a
+      // finalized status (booked/failed/awaiting_*), which the end-of-call-report owns.
       const t = await prisma.callTarget.findFirst({ where: { vapiCallId: msg.call.id } });
-      if (t && t.status === "calling") app.log.info({ status: msg.status }, "vapi status-update");
+      const mapped = mapVapiCallStatus(msg.status);
+      if (t && ACTIVE_CALL_STATES.includes(t.status) && mapped && mapped !== t.status) {
+        await prisma.callTarget.update({ where: { id: t.id }, data: { status: mapped } });
+        app.log.info({ from: t.status, to: mapped }, "vapi status-update");
+      }
     }
 
     if (msg.type === "end-of-call-report" && msg.call?.id) {
@@ -150,6 +156,21 @@ export async function webhookRoutes(app: FastifyInstance) {
     }
     return reply.send({ received: true });
   });
+}
+
+/**
+ * Map a Vapi call status-update to our refined in-flight CallTarget status. Returns null for
+ * statuses we don't surface (queued/forwarding/ended) — those leave the target as-is.
+ */
+function mapVapiCallStatus(status?: string): "ringing" | "in_call" | null {
+  switch (status) {
+    case "ringing":
+      return "ringing";
+    case "in-progress":
+      return "in_call";
+    default:
+      return null;
+  }
 }
 
 // Loose typing for the Vapi webhook payload (only the fields we read).

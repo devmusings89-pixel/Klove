@@ -41,7 +41,7 @@ export async function placeNextCall(sessionId: string): Promise<void> {
   if (!["paid", "scheduling", "in_progress"].includes(session.status)) return;
 
   // Don't start a second attempt while one is in flight (worker + webhook can both call this).
-  if (session.targets.some((t) => t.status === "calling")) return;
+  if (session.targets.some((t) => ACTIVE_CALL_STATES.includes(t.status))) return;
 
   // A warm transfer means the patient is live with that office — never start another call over it.
   if (session.targets.some((t) => t.status === "transferred")) {
@@ -90,6 +90,13 @@ export async function placeNextCall(sessionId: string): Promise<void> {
  */
 const STUCK_CALL_TIMEOUT_MS = 15 * 60 * 1000;
 
+/**
+ * A voice call that's been placed but hasn't reached a terminal outcome. Vapi status-update events
+ * refine "calling" → "ringing" → "in_call" so the client can show a live call theater; all three
+ * mean "a call is active on this target" for the place-guard and the stuck-call reaper.
+ */
+export const ACTIVE_CALL_STATES = ["calling", "ringing", "in_call"];
+
 export async function runSchedulerTick(): Promise<void> {
   const active = await prisma.session.findMany({
     where: { status: { in: ["paid", "scheduling", "in_progress"] } },
@@ -99,7 +106,7 @@ export async function runSchedulerTick(): Promise<void> {
   for (const session of active) {
     const stuck = session.targets.find(
       (t) =>
-        t.status === "calling" &&
+        ACTIVE_CALL_STATES.includes(t.status) &&
         t.calledAt != null &&
         Date.now() - t.calledAt.getTime() > STUCK_CALL_TIMEOUT_MS,
     );
