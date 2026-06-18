@@ -1,10 +1,15 @@
 import Foundation
 import Security
 
-/// App-wide configuration. Point `apiBaseURL` at your running backend
-/// (use your machine's LAN IP or an ngrok URL when testing on a device).
+/// App-wide configuration. `apiBaseURL` points at the deployed backend on Fly.io. Override per
+/// environment via the Info.plist key `API_BASE_URL` (e.g. `http://localhost:8080` for local dev,
+/// from a gitignored xcconfig) — otherwise it uses the production endpoint below.
 enum Config {
-    static let apiBaseURL = URL(string: "http://localhost:8080")!
+    static var apiBaseURL: URL {
+        let override = infoPlistString("API_BASE_URL")
+        return URL(string: override.isEmpty ? defaultApiBaseURL : override)!
+    }
+    private static let defaultApiBaseURL = "https://agents.klovehealth.com"
 
     /// Stripe publishable key (safe to ship in the client). Use your test key `pk_test_…`.
     /// When empty, the app falls back to the backend's mock-payment endpoint.
