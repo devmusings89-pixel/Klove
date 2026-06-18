@@ -18,6 +18,9 @@ import type { MediaItem } from "./whatsapp-media.js";
 
 const AUTH_DIR = process.env.BAILEYS_AUTH_DIR ?? ".baileys-auth";
 const logger = pino({ level: process.env.BAILEYS_LOG_LEVEL ?? "silent" });
+// When set (E.164 digits of the Klove number), pair headlessly via an 8-char code the user enters in
+// WhatsApp ("Link with phone number") instead of scanning a QR — the practical flow on a server.
+const PAIR_NUMBER = (process.env.BAILEYS_PAIR_NUMBER ?? "").replace(/\D/g, "");
 
 let sock: WASocket | null = null;
 let ready = false;
@@ -44,9 +47,22 @@ export async function startBaileys(): Promise<void> {
 
     sock.ev.on("creds.update", saveCreds);
 
+    // Headless pairing via code (preferred on a server): request once when not yet registered.
+    if (PAIR_NUMBER && !sock.authState.creds.registered) {
+      setTimeout(async () => {
+        try {
+          const code = await sock!.requestPairingCode(PAIR_NUMBER);
+          console.log(`\n[whatsapp] PAIRING CODE for +${PAIR_NUMBER}: ${code}\n  On the Klove phone: WhatsApp ▸ Linked Devices ▸ Link a Device ▸ "Link with phone number instead" ▸ enter this code.\n`);
+        } catch (err) {
+          console.error("[whatsapp] requestPairingCode failed", err);
+        }
+      }, 3000);
+    }
+
     sock.ev.on("connection.update", (u) => {
       const { connection, lastDisconnect, qr } = u;
-      if (qr) {
+      // Only show the QR when NOT using a pairing code (avoid two competing prompts).
+      if (qr && !PAIR_NUMBER) {
         console.log("\n[whatsapp] Pair the Klove WhatsApp account — scan this QR (WhatsApp ▸ Linked Devices ▸ Link a Device):\n");
         qrcode.generate(qr, { small: true });
       }
