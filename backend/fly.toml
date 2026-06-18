@@ -1,6 +1,6 @@
-# Klove backend on Fly.io → https://api.klovehealth.com
+# Klove backend on Fly.io → https://agents.klovehealth.com
 # Deploy:  fly launch --no-deploy   then   fly secrets set DATABASE_URL=... (all keys)   then   fly deploy
-# Custom domain:  fly certs add api.klovehealth.com  (then add the CNAME in Squarespace DNS)
+# Custom domain:  fly certs add agents.klovehealth.com  (then add the CNAME in Squarespace DNS)
 app = "klove-backend"
 # Pin to the SAME AWS region as your Supabase project to minimize DB latency (e.g. iad=us-east-1,
 # sjc=us-west, ord=us-central). Change to match your Supabase region.
@@ -10,7 +10,7 @@ primary_region = "iad"
 
 [env]
   PORT = "8080"
-  PUBLIC_BASE_URL = "https://api.klovehealth.com"
+  PUBLIC_BASE_URL = "https://agents.klovehealth.com"
   WHATSAPP_TRANSPORT = "baileys"
   # Baileys WhatsApp session creds live on the persistent volume (see [mounts]) so the dedicated
   # Klove number stays paired across deploys/restarts. First deploy prints a QR in `fly logs` to scan.
