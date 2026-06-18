@@ -125,11 +125,16 @@ async function resolveUser(req: FastifyRequest): Promise<{ id: string; email: st
     const token = typeof auth === "string" && auth.startsWith("Bearer ") ? auth.slice(7) : "";
     const claims = token ? await verifySupabaseJwt(token) : null;
     if (!claims?.sub || !claims.email) throw new Error("unauthorized");
-    const user = await prisma.user.upsert({
-      where: { authUserId: claims.sub },
-      create: { authUserId: claims.sub, email: claims.email },
-      update: { email: claims.email },
-    });
+    // Resolve by Supabase auth uid. If not yet linked, ADOPT an existing row with the same email
+    // (e.g. created earlier via the dev x-user-email path, authUserId null) by attaching the
+    // authUserId — this avoids a unique-email conflict that would otherwise 401 a valid token.
+    let user = await prisma.user.findUnique({ where: { authUserId: claims.sub } });
+    if (!user) {
+      const existing = await prisma.user.findUnique({ where: { email: claims.email } });
+      user = existing
+        ? await prisma.user.update({ where: { id: existing.id }, data: { authUserId: claims.sub } })
+        : await prisma.user.create({ data: { authUserId: claims.sub, email: claims.email } });
+    }
     return { id: user.id, email: claims.email };
   }
 
