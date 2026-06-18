@@ -133,20 +133,36 @@ private struct IdentifyStep: View {
                     }
                 }
 
-                if model.magicLinkSent {
-                    Text("Check your email for a link to finish signing in.")
-                        .font(.kloveCaption).foregroundStyle(Theme.ink).kloveCardSunken()
-                }
                 if let error = model.identifyError {
                     Text(error).font(.kloveCaption).foregroundStyle(.red)
                 }
 
-                Button { Task { await model.continueWithMagicLink() } } label: {
-                    if model.authBusy { ProgressView().tint(Theme.background) } else { Text("Continue with magic link") }
+                if model.magicLinkSent {
+                    Text("Enter the 6-digit code we emailed to \(model.email).")
+                        .font(.kloveCaption).foregroundStyle(Theme.inkSecondary)
+                    TextField("123456", text: $model.code)
+                        .keyboardType(.numberPad)
+                        .textContentType(.oneTimeCode)
+                        .multilineTextAlignment(.center)
+                        .font(.system(size: 26, weight: .semibold, design: .monospaced))
+                        .padding(.vertical, 14)
+                        .frame(maxWidth: .infinity)
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.hairline, lineWidth: 1))
+                    Button { Task { await model.verifyCode() } } label: {
+                        if model.authBusy { ProgressView().tint(Theme.background) } else { Text("Verify code") }
+                    }
+                    .buttonStyle(OnbButtonStyle(enabled: model.code.trimmingCharacters(in: .whitespaces).count >= 6))
+                    .disabled(model.code.trimmingCharacters(in: .whitespaces).count < 6)
+                    Button("Resend code") { Task { await model.continueWithMagicLink() } }
+                        .font(.kloveCaption).foregroundStyle(Theme.accent).padding(.top, 2)
+                } else {
+                    Button { Task { await model.continueWithMagicLink() } } label: {
+                        if model.authBusy { ProgressView().tint(Theme.background) } else { Text("Continue with email") }
+                    }
+                    .buttonStyle(OnbButtonStyle(enabled: canContinue))
+                    .disabled(!canContinue)
+                    .padding(.top, 4)
                 }
-                .buttonStyle(OnbButtonStyle(enabled: canContinue))
-                .disabled(!canContinue)
-                .padding(.top, 4)
 
                 OnbOrDivider()
 

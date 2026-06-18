@@ -108,14 +108,34 @@ final class OnboardingModel {
             identifyError = "Please accept the Terms to continue."
             return
         }
-        if await AuthService.shared.sendMagicLink(email) {
-            // Mock/dev: identity is set → continue. Live: link emailed; show a confirmation but the
-            // session completes via the deep-link callback.
+        if await AuthService.shared.sendEmailCode(email) {
+            // Mock/dev: identity is set → continue. Live: a 6-digit code is emailed; reveal the
+            // code-entry field (verifyCode completes the session, no deep link needed).
             if AuthService.shared.isSignedIn {
                 goToNext()
             } else {
                 magicLinkSent = true
             }
+        } else {
+            identifyError = AuthService.shared.errorMessage
+        }
+    }
+
+    /// The 6-digit code the user typed from the email.
+    var code = ""
+
+    /// Verify the emailed 6-digit code → session. On success, the isAuthenticated observer advances.
+    func verifyCode() async {
+        authBusy = true
+        defer { authBusy = false }
+        identifyError = nil
+        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 6 else {
+            identifyError = "Enter the 6-digit code from your email."
+            return
+        }
+        if await AuthService.shared.verifyEmailOtp(email, trimmed) {
+            goToNext()
         } else {
             identifyError = AuthService.shared.errorMessage
         }

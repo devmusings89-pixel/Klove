@@ -202,6 +202,64 @@ final class AuthService: NSObject {
         return false
     }
 
+    /// Email one-time **6-digit code** (no link → robust against iCloud/corporate link prefetch that
+    /// silently consumes magic links). Requires the Supabase email template to include `{{ .Token }}`.
+    @discardableResult
+    func sendEmailCode(_ email: String) async -> Bool {
+        let trimmed = email.trimmingCharacters(in: .whitespaces).lowercased()
+        guard trimmed.contains("@"), trimmed.contains(".") else {
+            errorMessage = "Enter a valid email."
+            return false
+        }
+        if !requiresRealToken {
+            UserDefaults.standard.set(trimmed, forKey: AppStorageKey.userEmail)
+            isAuthenticated = true
+            errorMessage = nil
+            return true
+        }
+        guard let url = URL(string: "\(Config.supabaseURL)/auth/v1/otp") else { return false }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["email": trimmed, "create_user": true])
+        let code = ((try? await URLSession.shared.data(for: req))?.1 as? HTTPURLResponse)?.statusCode ?? 500
+        if code < 300 { errorMessage = nil; return true }
+        errorMessage = "Couldn't send your code. Please try again."
+        return false
+    }
+
+    /// Verify the 6-digit email code → a Supabase session (returned directly; no redirect/deep link).
+    @discardableResult
+    func verifyEmailOtp(_ email: String, _ code: String) async -> Bool {
+        let trimmedEmail = email.trimmingCharacters(in: .whitespaces).lowercased()
+        let token = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !requiresRealToken {
+            UserDefaults.standard.set(trimmedEmail, forKey: AppStorageKey.userEmail)
+            isAuthenticated = true
+            errorMessage = nil
+            return true
+        }
+        guard let url = URL(string: "\(Config.supabaseURL)/auth/v1/verify") else { return false }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["email": trimmedEmail, "token": token, "type": "email"])
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let access = json["access_token"] as? String else {
+            errorMessage = "That code is incorrect or expired. Check the latest email, or resend."
+            return false
+        }
+        KeychainStore.set(access, for: AppStorageKey.authToken)
+        UserDefaults.standard.set(Self.emailFromJWT(access) ?? trimmedEmail, forKey: AppStorageKey.userEmail)
+        isAuthenticated = true
+        errorMessage = nil
+        return true
+    }
+
     /// The app's auth deep-link target — must be added to Supabase → Auth → URL Configuration →
     /// Redirect URLs, and `klove` is registered in Info.plist's CFBundleURLSchemes.
     static let authCallback = "klove://auth-callback"
