@@ -41,12 +41,14 @@ async function buildPatientInfo(
   const allPlans = [...(memberProfile?.insurance ?? []), ...(opProfile?.insurance ?? [])];
   const chosen = input.insurancePlanId ? allPlans.find((p) => p.id === input.insurancePlanId) : undefined;
   const plan = chosen ?? memberProfile?.insurance?.[0] ?? opProfile?.insurance?.[0];
-  const memberId = plan?.memberIdEnc ? decryptToken(plan.memberIdEnc) : "";
+  const savedMemberId = plan?.memberIdEnc ? decryptToken(plan.memberIdEnc) : "";
+  // Prefer details the agent gathered in chat for THIS booking over what's on file.
+  const memberId = input.memberId?.trim() || savedMemberId;
   return {
-    name: (member?.displayName || memberProfile?.fullName || "the patient").trim(),
-    dob: memberProfile?.dob || (member?.dob ? member.dob.toISOString().slice(0, 10) : ""),
+    name: (input.patientName?.trim() || member?.displayName || memberProfile?.fullName || "the patient").trim(),
+    dob: input.dob?.trim() || memberProfile?.dob || (member?.dob ? member.dob.toISOString().slice(0, 10) : ""),
     reason,
-    insurance: [plan?.carrier, plan?.planName].filter(Boolean).join(" "),
+    insurance: input.insurance?.trim() || [plan?.carrier, plan?.planName].filter(Boolean).join(" "),
     additionalInfo: memberId ? `Insurance member ID: ${memberId}` : "",
     preferredTimes: input.preferredTimes ?? input.preferredDate ?? "",
     acceptableWindow: input.preferredTimes ?? "",
@@ -73,6 +75,12 @@ export interface BookingInput {
   // Lets the operator book Dad's visit on his Medicare, not her family plan. Falls back to the
   // member's primary card, then the operator's primary card.
   insurancePlanId?: string;
+  // Details the agent gathered in chat for THIS booking (override what's on file). Let the concierge
+  // call go in fully prepared so the office doesn't turn us away for missing info.
+  patientName?: string;
+  dob?: string; // ISO yyyy-mm-dd
+  insurance?: string; // carrier (+ plan) as free text, e.g. "Aetna PPO"
+  memberId?: string; // insurance member/subscriber ID
 }
 
 export interface BookingOutcome {

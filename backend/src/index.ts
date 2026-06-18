@@ -29,7 +29,8 @@ import { runReminderTick, autoGenerateReminders } from "./services/reminders.js"
 import { runMedicationDoseTick, runMissedDoseTick, runRefillTick } from "./services/medications.js";
 import { runProactiveOutreachTick } from "./services/proactive.js";
 import { smsEnabled } from "./services/sms.js";
-import { whatsappEnabled } from "./services/whatsapp.js";
+import { whatsappEnabled, whatsappTransport } from "./services/whatsapp.js";
+import { startBaileys } from "./services/whatsapp-baileys.js";
 import { reconcileConciergeJobs } from "./services/concierge.js";
 
 // HIPAA: never log request/response bodies (they carry PHI) and redact identity headers. The
@@ -161,7 +162,7 @@ app.get("/health", async () => ({
     vapi: enabled.vapi() ? "live" : "mock",
     stripe: enabled.stripe() ? "live" : "mock",
     resend: enabled.resend() ? "live" : "mock",
-    whatsapp: whatsappEnabled() ? "live" : "mock",
+    whatsapp: `${whatsappTransport()}:${whatsappEnabled() ? "live" : whatsappTransport() === "baileys" ? "connecting" : "mock"}`,
     googlePlaces: enabled.googlePlaces() ? "live" : "mock",
     web: enabled.web() ? `live:${config.webAgent.provider}` : "mock",
     storage: enabled.supabase() ? "live:supabase" : "mock:local",
@@ -231,8 +232,8 @@ function simulatedSubsystems(): { name: string; fix: string }[] {
     out.push({ name: "Email sending (logged, not delivered)", fix: "RESEND_API_KEY" });
   if (!smsEnabled())
     out.push({ name: "SMS sending (logged, not delivered)", fix: "TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_FROM_NUMBER" });
-  if (!whatsappEnabled())
-    out.push({ name: "WhatsApp concierge sending (logged, not delivered)", fix: "TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_WHATSAPP_FROM" });
+  if (whatsappTransport() === "twilio" && !whatsappEnabled())
+    out.push({ name: "WhatsApp sending (Twilio, logged not delivered)", fix: "TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_WHATSAPP_FROM" });
   if (!enabled.apns())
     out.push({ name: "Push notifications (no-op)", fix: "APNS_KEY_ID + APNS_TEAM_ID + APNS_BUNDLE_ID + APNS_KEY_PATH" });
   if (!enabled.supabase())
@@ -264,6 +265,10 @@ app
   .listen({ port: config.port, host: "0.0.0.0" })
   .then(() => {
     app.log.info(`Klove backend on :${config.port}`);
+    // WhatsApp via Baileys: open the socket (prints a QR to pair on first run). Twilio uses the webhook.
+    if (whatsappTransport() === "baileys") {
+      startBaileys().catch((err) => app.log.error({ err }, "baileys start failed"));
+    }
     // Worker: advance scheduled/deferred sessions, reap stuck calls, and fire due reminders every 60s.
     setInterval(() => {
       runSchedulerTick().catch((err) => app.log.error({ err }, "scheduler tick failed"));

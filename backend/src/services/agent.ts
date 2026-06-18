@@ -17,7 +17,7 @@ import { loadMemory, rememberFromTurn } from "./agent-memory.js";
 import { bookingAgent } from "./agents/booking.js";
 import { healthQaAgent } from "./agents/healthqa.js";
 import { briefingAgent } from "./agents/briefing.js";
-import { assertCanOperate, type AgentContext, type ProposedAction, type Subagent } from "./agents/shared.js";
+import { assertCanOperate, BASE_SYSTEM, type AgentContext, type ProposedAction, type Subagent, type SubagentResult } from "./agents/shared.js";
 
 const PENDING_TTL_MS = 30 * 60_000; // a proposed action awaiting "yes" expires after 30 min
 const HISTORY_TURNS = 20;
@@ -87,29 +87,53 @@ export async function handleInboundMessage(user: InboundUser, rawText: string): 
   // ---- Route to a specialist subagent. ----
   const ctx: AgentContext = { operatorUserId: user.id, householdId, members, text, history, memory };
   let reply: string;
+  let route: Route | null = null;
   try {
-    const result = await routeAndRun(ctx);
-    if (result.kind === "propose") {
-      await storePending(convo.id, result.action);
-      reply = result.action.restatement;
+    const routed = await routeAndRun(ctx);
+    route = routed.route;
+    if (routed.result.kind === "propose") {
+      await storePending(convo.id, routed.result.action);
+      reply = routed.result.action.restatement;
     } else {
-      reply = result.text;
+      reply = routed.result.text;
     }
   } catch (err) {
     console.error("agent subagent failed:", (err as Error).message);
     reply = "Sorry — I hit a snag handling that. Could you rephrase?";
   }
   await saveMessage(householdId, user.id, "out", reply);
-  // Learn any durable preferences from this turn for future conversations (fire-and-forget).
-  void rememberFromTurn(user.id, householdId, text, memory).catch((e) => console.error("memory write failed", e));
+  // Learn any durable preferences from this turn (fire-and-forget). The note path already stored them.
+  if (route !== "note") void rememberFromTurn(user.id, householdId, text, memory).catch((e) => console.error("memory write failed", e));
   return reply;
 }
 
-/** Classify an inbound message and run the matching specialist subagent. Shared by WhatsApp + /ask. */
-async function routeAndRun(ctx: AgentContext) {
+/** Classify an inbound message and run the matching specialist. Returns the route so the caller can
+ *  skip the redundant post-turn memory write on a note (which already stored synchronously). */
+async function routeAndRun(ctx: AgentContext): Promise<{ route: Route; result: SubagentResult }> {
   const route = await classify(ctx.text, ctx.history);
+  if (route === "note") return { route, result: await handleNote(ctx) };
   const agent: Subagent = route === "booking" ? bookingAgent : route === "briefing" ? briefingAgent : healthQaAgent;
-  return agent.run(ctx);
+  return { route, result: await agent.run(ctx) };
+}
+
+/**
+ * The user stated a standing preference/instruction. Store it synchronously (so the acknowledgment
+ * reflects exactly what we saved), then confirm warmly in their own framing. If nothing durable was
+ * actually said, fall back to a normal answer rather than a false "got it".
+ */
+async function handleNote(ctx: AgentContext): Promise<SubagentResult> {
+  const before = ctx.memory;
+  await rememberFromTurn(ctx.operatorUserId, ctx.householdId, ctx.text, before).catch((e) => console.error("note memory write failed", e));
+  const after = await loadMemory(ctx.operatorUserId);
+  const added = after.filter((a) => !before.some((b) => b.toLowerCase() === a.toLowerCase()));
+  if (!added.length) return healthQaAgent.run(ctx); // not actually a durable note — answer normally
+
+  const ack = await runText({
+    system: `${BASE_SYSTEM}\nThe user just told you something to remember for the future. In ONE short, warm line, confirm you've got it, reflecting what you understood in natural second-person language. Only add a brief follow-up offer if it's genuinely natural.`,
+    content: `User said: "${ctx.text}"\nYou've saved: ${added.join("; ")}`,
+    maxTokens: 80,
+  }).catch(() => null);
+  return { kind: "reply", text: ack?.trim() || `Got it — I'll remember that. 👍` };
 }
 
 export interface AskResult {
@@ -131,21 +155,22 @@ export async function askKlove(operatorUserId: string, text: string): Promise<As
   const [members, memory] = await Promise.all([accessibleSubjects(operatorUserId), loadMemory(operatorUserId)]);
   const ctx: AgentContext = { operatorUserId, householdId, members, text: text.trim(), history: [], memory };
 
-  let result;
+  let routed;
   try {
-    result = await routeAndRun(ctx);
+    routed = await routeAndRun(ctx);
   } catch (err) {
     console.error("askKlove failed:", (err as Error).message);
     return { kind: "answer", routedTo: "ai", answer: "Sorry — I couldn't process that just now. Try rephrasing?" };
   }
-  void rememberFromTurn(operatorUserId, householdId, text, memory).catch((e) => console.error("memory write failed", e));
+  // The note path stored its preference synchronously; for other routes, learn in the background.
+  if (routed.route !== "note") void rememberFromTurn(operatorUserId, householdId, text, memory).catch((e) => console.error("memory write failed", e));
 
-  if (result.kind === "reply") {
-    return { kind: "answer", routedTo: "ai", answer: result.text };
+  if (routed.result.kind === "reply") {
+    return { kind: "answer", routedTo: "ai", answer: routed.result.text };
   }
-  const answer = await executeAction(operatorUserId, result.action);
+  const answer = await executeAction(operatorUserId, routed.result.action);
   const task = await prisma.task.findFirst({
-    where: { subjectUserId: result.action.subjectUserId, kind: { in: ["book", "choose_time"] } },
+    where: { subjectUserId: routed.result.action.subjectUserId, kind: { in: ["book", "choose_time"] } },
     orderBy: { createdAt: "desc" },
   });
   return { kind: "escalated", routedTo: "concierge", answer, taskId: task?.id ?? undefined };
@@ -165,11 +190,18 @@ async function executeAction(operatorUserId: string, action: ProposedAction): Pr
   switch (action.tool) {
     case "book_appointment": {
       const reason = String(action.args.reason ?? "Appointment");
-      const provider = action.args.provider ? String(action.args.provider) : undefined;
-      const preferredTimes = action.args.preferredTimes ? String(action.args.preferredTimes) : undefined;
-      const phone = action.args.phone ? String(action.args.phone) : undefined;
-      const website = action.args.website ? String(action.args.website) : undefined;
-      const outcome = await bookAppointment(operatorUserId, action.subjectUserId, householdId, { reason, provider, preferredTimes, phone, website });
+      const str = (v: unknown) => (v ? String(v) : undefined);
+      const outcome = await bookAppointment(operatorUserId, action.subjectUserId, householdId, {
+        reason,
+        provider: str(action.args.provider),
+        preferredTimes: str(action.args.preferredTimes),
+        phone: str(action.args.phone),
+        website: str(action.args.website),
+        insurance: str(action.args.insurance),
+        memberId: str(action.args.memberId),
+        dob: str(action.args.dob),
+      });
+      const provider = str(action.args.provider);
       await audit(operatorUserId, action.subjectUserId, "booking_authorized", `WhatsApp booking: ${reason}`);
       if (outcome.status === "in_progress") {
         return `On it — I'm contacting ${provider ?? "the office"} to book ${reason}. I'll message you the moment it's confirmed.`;
@@ -205,14 +237,17 @@ async function audit(actorUserId: string, subjectUserId: string, action: string,
 
 // ---- Intent routing ----
 
-type Route = "booking" | "healthqa" | "briefing";
+type Route = "booking" | "healthqa" | "briefing" | "note";
 
 const BOOKING_KW = ["book", "appointment", "schedule", "reschedul", "cancel", "slot", "dentist", "doctor", "dermatolog", "checkup", "check-up", "visit"];
 const BRIEFING_KW = ["today", "upcoming", "summary", "needs", "prep", "prepare", "what should i ask", "remind", "due", "agenda", "brief", "my day"];
+// A pure preference / instruction / FYI to remember (no question, no action request).
+const NOTE_RE = /\b(just so you know|for (future|the future|next time)|fyi|note:|remember (that|this)|keep in mind|from now on|going forward|i (prefer|always|usually|like|hate|don'?t (want|like))|call me|i'?m on .* insurance|my insurance is|use my)\b/i;
 
 function keywordClassify(text: string): Route {
   const t = text.toLowerCase();
   if (BOOKING_KW.some((k) => t.includes(k))) return "booking";
+  if (NOTE_RE.test(t) && !text.includes("?")) return "note";
   if (BRIEFING_KW.some((k) => t.includes(k))) return "briefing";
   return "healthqa";
 }
@@ -222,9 +257,12 @@ const CLASSIFY_SYSTEM =
   "- booking: book, schedule, reschedule, cancel, or pick a time for an appointment\n" +
   "- briefing: their to-do summary, what's coming up, or questions to ask at a visit\n" +
   "- healthqa: an informational question about someone's health records (labs, meds, conditions, trends)\n" +
+  "- note: they're just stating a standing preference, instruction, or FYI for you to REMEMBER (e.g. 'I prefer " +
+  "mornings', 'always use my Aetna', 'call me Sam', 'avoid Fridays') — NOT asking a question or requesting an action\n" +
   "Use the recent conversation to resolve short or elliptical follow-ups: 'is that improving?', 'what about my " +
   "cholesterol?', 'and mom's?' usually continue the SAME topic as the previous turns. 'yes'/'do it' continue whatever " +
-  "was just proposed. Reply with ONLY the single label word.";
+  "was just proposed. If a message both states a preference AND asks/requests something, prefer booking/healthqa/briefing " +
+  "(the preference still gets remembered separately). Reply with ONLY the single label word.";
 
 /** Route an inbound message. Keyword first; refine with a context-aware LLM call when configured. */
 export async function classify(text: string, history: { role: "user" | "assistant"; content: string }[] = []): Promise<Route> {
@@ -237,6 +275,7 @@ export async function classify(text: string, history: { role: "user" | "assistan
     const n = (out ?? "").toLowerCase();
     if (n.includes("book")) return "booking";
     if (n.includes("brief")) return "briefing";
+    if (n.includes("note")) return "note";
     if (n.includes("health")) return "healthqa";
   } catch (err) {
     console.error("classify LLM failed:", (err as Error).message);

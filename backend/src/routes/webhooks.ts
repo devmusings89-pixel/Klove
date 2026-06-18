@@ -11,9 +11,10 @@ import { ingestArtifact } from "../services/ingestion.js";
 import { syncConnection } from "../services/health-worker.js";
 import { encryptToken } from "../services/crypto.js";
 import { exchangeCodeForTokens, getGmailProfile } from "../services/google.js";
-import { sendWhatsApp, verifyTwilioSignature, twilioAuthConfigured } from "../services/whatsapp.js";
+import { verifyTwilioSignature, twilioAuthConfigured } from "../services/whatsapp.js";
 import { toE164 } from "../services/phone.js";
-import { resolveUserByWhatsapp, handleInboundMessage } from "../services/agent.js";
+import { handleWhatsAppInbound } from "../services/whatsapp-inbound.js";
+import { downloadTwilioMedia } from "../services/whatsapp-media.js";
 
 export async function webhookRoutes(app: FastifyInstance) {
   // ---- Stripe ----
@@ -115,19 +116,21 @@ export async function webhookRoutes(app: FastifyInstance) {
     const body = (req.body ?? {}) as Record<string, string>;
     const from = toE164((body.From ?? "").replace(/^whatsapp:/, ""));
     const text = (body.Body ?? "").trim();
-    if (!from || !text) return xml();
+    if (!from) return xml();
 
-    const user = await resolveUserByWhatsapp(from);
-    if (!user) {
-      // Unknown number: one generic reply, never create a user from inbound (anti-abuse).
-      await sendWhatsApp(from, "This number isn't linked to a Klove account yet. Open the Klove app to connect it.").catch(() => {});
-      return xml();
+    // Collect any media (Twilio gives authed URLs), then run the shared inbound handler out-of-band so
+    // the webhook returns fast (the agent loop can outlast Twilio's webhook timeout).
+    const numMedia = Number(body.NumMedia ?? "0") || 0;
+    const mediaUrls: { url: string; contentType: string }[] = [];
+    for (let i = 0; i < numMedia; i++) {
+      const url = body[`MediaUrl${i}`];
+      if (url) mediaUrls.push({ url, contentType: body[`MediaContentType${i}`] ?? "application/octet-stream" });
     }
 
-    // Run the agent out-of-band so the webhook returns fast; deliver the reply over REST.
-    handleInboundMessage(user, text)
-      .then((response) => sendWhatsApp(from, response))
-      .catch((err) => app.log.error({ err }, "whatsapp agent failed"));
+    void (async () => {
+      const media = mediaUrls.length ? await downloadTwilioMedia(mediaUrls) : [];
+      await handleWhatsAppInbound(from, text, media);
+    })().catch((err) => app.log.error({ err }, "whatsapp inbound failed"));
     return xml();
   });
 

@@ -6,6 +6,8 @@ import { ensureHousehold } from "../src/services/household.js";
 import { sendWhatsApp, verifyTwilioSignature } from "../src/services/whatsapp.js";
 import { resolveUserByWhatsapp, handleInboundMessage } from "../src/services/agent.js";
 import { loadMemory, rememberFromTurn } from "../src/services/agent-memory.js";
+import { fileMedia } from "../src/services/whatsapp-media.js";
+import { removeObject } from "../src/services/storage.js";
 import { llmAvailable } from "../src/services/llm-tool.js";
 import { runProactiveOutreachTick } from "../src/services/proactive.js";
 import { toJson } from "../src/services/json.js";
@@ -37,6 +39,12 @@ after(async () => {
   await prisma.task.deleteMany({ where: { subjectUserId: { in: userIds } } });
   await prisma.appointment.deleteMany({ where: { userId: { in: userIds } } });
   await prisma.healthAlert.deleteMany({ where: { userId: { in: userIds } } });
+  // Health documents filed via WhatsApp media (+ extraction jobs, storage objects, upload connection).
+  const docs = await prisma.healthDocument.findMany({ where: { userId: { in: userIds } }, select: { storagePath: true } });
+  await prisma.extractionJob.deleteMany({ where: { userId: { in: userIds } } });
+  await prisma.healthDocument.deleteMany({ where: { userId: { in: userIds } } });
+  await prisma.dataSourceConnection.deleteMany({ where: { userId: { in: userIds } } });
+  for (const d of docs) if (d.storagePath) await removeObject(d.storagePath).catch(() => {});
   // Sessions + their targets/results created by simulatedBooking.
   const sessions = await prisma.session.findMany({ where: { userId: { in: userIds } }, select: { id: true } });
   const sids = sessions.map((s) => s.id);
@@ -52,9 +60,32 @@ after(async () => {
   await prisma.$disconnect();
 });
 
-test("sendWhatsApp returns true in mock mode and false for an unusable number", async () => {
-  assert.equal(await sendWhatsApp("+12065551234", "hello"), true); // mock log
-  assert.equal(await sendWhatsApp("nonsense", "hello"), false);
+test("sendWhatsApp routes by transport and rejects an unusable number", async () => {
+  const prev = process.env.WHATSAPP_TRANSPORT;
+  process.env.WHATSAPP_TRANSPORT = "twilio"; // Baileys (default) returns false until the socket connects
+  try {
+    assert.equal(await sendWhatsApp("+12065551234", "hello"), true); // twilio mock log
+    assert.equal(await sendWhatsApp("nonsense", "hello"), false);
+  } finally {
+    if (prev === undefined) delete process.env.WHATSAPP_TRANSPORT;
+    else process.env.WHATSAPP_TRANSPORT = prev;
+  }
+});
+
+test("an inbound WhatsApp image is filed as a health record (vision_ocr queued)", async () => {
+  const op = await mkOperator("media");
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]); // PNG signature
+  const res = await fileMedia(op.id, [{ bytes: png, contentType: "image/png" }], "insurance card");
+  assert.equal(res.filed, 1);
+  const doc = await prisma.healthDocument.findFirst({ where: { userId: op.id } });
+  assert.ok(doc, "a health document should be created");
+  assert.equal(doc!.sourceType, "upload");
+  const job = await prisma.extractionJob.findFirst({ where: { documentId: doc!.id } });
+  assert.equal(job?.kind, "vision_ocr", "a vision OCR extraction job should be queued");
+  // Unsupported types are skipped, not filed.
+  const res2 = await fileMedia(op.id, [{ bytes: Buffer.from("hello"), contentType: "text/plain" }]);
+  assert.equal(res2.filed, 0);
+  assert.equal(res2.skipped, 1);
 });
 
 test("verifyTwilioSignature accepts a correct signature and rejects a tampered one", async () => {
@@ -189,6 +220,17 @@ test("the agent remembers a stated preference across sessions (cross-session mem
   await rememberFromTurn(op.id, op.householdId, "I prefer morning appointments.", mem);
   const mem2 = await loadMemory(op.id);
   assert.ok(mem2.length <= mem.length + 1, "duplicate preference should not grow memory");
+});
+
+test("a pure preference is acknowledged and remembered (note intent)", async (t) => {
+  if (!llmAvailable()) return t.skip("no LLM configured");
+  const op = await mkOperator("note");
+  const reply = await handleInboundMessage({ id: op.id, whatsappVerified: true }, "just so you know, I always prefer afternoon appointments");
+  // The agent should acknowledge rather than give a generic briefing/answer.
+  assert.match(reply, /got it|noted|remember|afternoon|keep/i);
+  const mem = await loadMemory(op.id);
+  assert.ok(mem.length >= 1, "the preference should be stored");
+  assert.match(mem.join(" ").toLowerCase(), /afternoon/, "memory should capture the afternoon preference");
 });
 
 test("proactive outreach is throttled to once per day per operator", async () => {

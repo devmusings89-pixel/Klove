@@ -1,16 +1,19 @@
-// WhatsApp channel for Klove's concierge agent. Twilio's WhatsApp uses the SAME Messages API as SMS
-// (see sms.ts) — only the To/From carry a "whatsapp:" prefix. We mirror sms.ts: real send when Twilio
-// creds + a WhatsApp sender are present, otherwise a mock log so the pipeline is exercisable in dev.
-//
-// Config is read straight from process.env here (like sms.ts) so this channel can be added without
-// touching the central config. Inbound messages arrive at POST /webhooks/whatsapp and are verified
-// with verifyTwilioSignature() below.
+// WhatsApp transport dispatch. The concierge agent calls sendWhatsApp() and is agnostic to how the
+// message goes out. Two transports:
+//   - baileys (default): logs in as a real WhatsApp account (free, no 24h window, native media).
+//   - twilio: the official Business API (per-message cost, 24h proactive window).
+// Pick via WHATSAPP_TRANSPORT. Inbound for Baileys arrives on its socket (whatsapp-baileys.ts); for
+// Twilio it arrives on POST /webhooks/whatsapp — both funnel into handleWhatsAppInbound.
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { toE164 } from "./phone.js";
+import { sendViaBaileys, isBaileysReady } from "./whatsapp-baileys.js";
 
-// Read env lazily (not at module load) so the channel can be configured/toggled at runtime and in
-// tests. The WhatsApp sender (`from`) is E.164, e.g. "+14155238886" — no "whatsapp:" prefix here.
+export type WhatsAppTransport = "baileys" | "twilio";
+export function whatsappTransport(): WhatsAppTransport {
+  return (process.env.WHATSAPP_TRANSPORT ?? "baileys").toLowerCase() === "twilio" ? "twilio" : "baileys";
+}
+
 function twilioCfg() {
   return {
     accountSid: process.env.TWILIO_ACCOUNT_SID ?? "",
@@ -19,8 +22,9 @@ function twilioCfg() {
   };
 }
 
-/** True when Twilio WhatsApp is configured; otherwise WhatsApp runs in mock mode (logs only). */
+/** True when the active transport can actually deliver (Baileys connected, or Twilio configured). */
 export function whatsappEnabled(): boolean {
+  if (whatsappTransport() === "baileys") return isBaileysReady();
   const t = twilioCfg();
   return Boolean(t.accountSid && t.authToken && t.from);
 }
@@ -31,12 +35,8 @@ export function twilioAuthConfigured(): boolean {
 }
 
 /**
- * Send one WhatsApp message (or log it in mock mode). Normalizes the recipient to E.164 first;
+ * Send one WhatsApp message via the active transport. Normalizes the recipient to E.164 first;
  * returns false if the number is unusable or delivery is rejected so callers can degrade gracefully.
- *
- * Note: Twilio only allows free-form business-initiated messages within 24h of the user's last
- * inbound message. Outside that window a pre-approved template is required — callers that send
- * proactively must gate on that window (see services/notify.ts). This function does not enforce it.
  */
 export async function sendWhatsApp(to: string, body: string): Promise<boolean> {
   const e164 = toE164(to);
@@ -44,13 +44,16 @@ export async function sendWhatsApp(to: string, body: string): Promise<boolean> {
     console.warn(`[whatsapp] unusable phone number "${to}"`);
     return false;
   }
+  return whatsappTransport() === "baileys" ? sendViaBaileys(e164, body) : sendViaTwilio(e164, body);
+}
 
-  if (!whatsappEnabled()) {
+/** Twilio Business API send (fallback transport). Mock-logs when Twilio creds are absent. */
+async function sendViaTwilio(e164: string, body: string): Promise<boolean> {
+  const twilio = twilioCfg();
+  if (!(twilio.accountSid && twilio.authToken && twilio.from)) {
     console.log(`[whatsapp mock] to=${e164}\n${body}`);
     return true;
   }
-
-  const twilio = twilioCfg();
   const params = new URLSearchParams({ To: `whatsapp:${e164}`, From: `whatsapp:${twilio.from}`, Body: body });
   const auth = Buffer.from(`${twilio.accountSid}:${twilio.authToken}`).toString("base64");
   const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${twilio.accountSid}/Messages.json`, {
@@ -59,30 +62,20 @@ export async function sendWhatsApp(to: string, body: string): Promise<boolean> {
     body: params.toString(),
   });
   if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    console.error(`Twilio WhatsApp send failed: HTTP ${res.status} ${detail}`);
+    console.error(`Twilio WhatsApp send failed: HTTP ${res.status} ${await res.text().catch(() => "")}`);
     return false;
   }
-  console.log(`WhatsApp sent to ${e164}`);
   return true;
 }
 
 /**
- * Verify a Twilio inbound webhook signature (X-Twilio-Signature). Twilio's scheme:
- *   signature = base64( HMAC-SHA1( authToken, fullUrl + sorted(key+value for each POST param) ) )
- * Keys are sorted alphabetically and concatenated with their values, no separators, appended to the
- * exact request URL. Returns true when the computed signature matches the header in constant time.
+ * Verify a Twilio inbound webhook signature (X-Twilio-Signature):
+ *   base64( HMAC-SHA1( authToken, fullUrl + sorted(key+value for each POST param) ) ).
  */
-export function verifyTwilioSignature(
-  url: string,
-  params: Record<string, string>,
-  signature: string | undefined,
-): boolean {
+export function verifyTwilioSignature(url: string, params: Record<string, string>, signature: string | undefined): boolean {
   const authToken = twilioCfg().authToken;
   if (!signature || !authToken) return false;
-  const data = Object.keys(params)
-    .sort()
-    .reduce((acc, key) => acc + key + params[key], url);
+  const data = Object.keys(params).sort().reduce((acc, key) => acc + key + params[key], url);
   const expected = createHmac("sha1", authToken).update(Buffer.from(data, "utf8")).digest();
   let actual: Buffer;
   try {

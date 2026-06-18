@@ -24,7 +24,7 @@ async function purgeSessions(ids: string[]) {
 
 async function main() {
   const users = await prisma.user.findMany({
-    where: { email: { endsWith: "@klove.test" }, OR: [{ email: { contains: ".eval-" } }, { email: { contains: ".convo-" } }, { email: { contains: ".mem-" } }] },
+    where: { email: { endsWith: "@klove.test" }, OR: [{ email: { contains: ".eval-" } }, { email: { contains: ".convo-" } }, { email: { contains: ".mem-" } }, { email: { contains: ".e2e-" } }] },
     select: { id: true, email: true },
   });
   const ids = users.map((u) => u.id);

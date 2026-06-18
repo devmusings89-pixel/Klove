@@ -45,6 +45,21 @@ export async function getObject(storagePath: string): Promise<Buffer> {
   return Buffer.from(await data.arrayBuffer());
 }
 
+/** Delete a stored object (best-effort; used for cleanup). */
+export async function removeObject(storagePath: string): Promise<void> {
+  if (!enabled.supabase()) {
+    try {
+      const { unlink } = await import("node:fs/promises");
+      await unlink(storagePath);
+    } catch {
+      /* already gone */
+    }
+    return;
+  }
+  const supabase = await client();
+  await supabase.storage.from(config.supabase.storageBucket).remove([storagePath]).catch(() => undefined);
+}
+
 /** Mint a short-lived signed URL for the client to view a document (Supabase only). */
 export async function signedUrl(storagePath: string, expiresInSec = 300): Promise<string | null> {
   if (!enabled.supabase()) return null; // mock files aren't web-served

@@ -7,6 +7,7 @@ import { prisma } from "../../db.js";
 import { runTool } from "../llm-tool.js";
 import { fromJson } from "../json.js";
 import { searchOffices } from "../lookup.js";
+import { toE164 } from "../phone.js";
 import { BASE_SYSTEM, resolveMemberFromText, type AgentContext, type Subagent, type SubagentResult } from "./shared.js";
 
 const BOOK_TOOL = {
@@ -25,6 +26,10 @@ const BOOK_TOOL = {
       },
       provider: { type: "string", description: "A specific office or doctor name if the user named one (e.g. 'Dr. Lee', 'ABC Dermatology'); omit otherwise." },
       preferred_times: { type: "string", description: "Any timing the user mentioned, e.g. 'next week', 'weekday mornings', 'after 3pm'; omit if none." },
+      phone: { type: "string", description: "A phone number for the office if the user provided one; omit otherwise." },
+      insurance_carrier: { type: "string", description: "Insurance carrier/plan if the user gave it, e.g. 'Aetna', 'Blue Cross PPO'; omit otherwise." },
+      insurance_member_id: { type: "string", description: "Insurance member/subscriber ID if the user gave it; omit otherwise." },
+      dob: { type: "string", description: "Patient date of birth if the user gave it, as yyyy-mm-dd; omit otherwise." },
     },
     required: ["reason"],
   } as Record<string, unknown>,
@@ -34,6 +39,16 @@ interface BookArgs {
   reason?: string;
   provider?: string;
   preferred_times?: string;
+  phone?: string;
+  insurance_carrier?: string;
+  insurance_member_id?: string;
+  dob?: string;
+}
+
+/** Pull a phone number out of free text ("their number is 206-351-8641") → E.164, or null. */
+function extractPhone(text: string): string | null {
+  const m = text.match(/(\+?\d[\d\s().-]{7,}\d)/);
+  return m ? toE164(m[1]) : null;
 }
 
 /** Does this message look like a reply picking one of an offered set of slots? */
@@ -116,42 +131,99 @@ export const bookingAgent: Subagent = {
 
     const provider = args.provider?.trim();
     const preferred = args.preferred_times?.trim();
+    const forWhom = member.id === ctx.members[0]?.id ? "you" : member.name;
 
-    // Look up the actual doctor/office BEFORE proposing, so we confirm a real place Klove can reach
-    // and then book it live — never a fabricated hold. Search by the named provider if given, else by
-    // specialty + the member's location.
-    const location = await memberLocation(member.id, ctx.operatorUserId);
-    const base = provider || reason;
-    const query = location ? `${base} near ${location}` : base;
-    const matches = await searchOffices(query);
-    if (!matches.length) {
-      return {
-        kind: "reply",
-        text: `I couldn't find an office for "${base}". What's the office name, or a city/area to search near?`,
-      };
+    // Resolve the office: a user-provided phone wins; otherwise look it up via Places. We confirm a
+    // real, reachable place before dialing — never a fabricated hold.
+    const phone = toE164(args.phone ?? "") || extractPhone(ctx.text) || extractPhone(recent);
+    let office: { name: string; phone?: string; website?: string; address?: string };
+    if (phone) {
+      office = { name: provider || "the office", phone };
+    } else {
+      const location = await memberLocation(member.id, ctx.operatorUserId);
+      const base = provider || reason;
+      const query = location ? `${base} near ${location}` : base;
+      const matches = await searchOffices(query);
+      if (!matches.length) {
+        return { kind: "reply", text: `I couldn't find an office for "${base}". What's the office name, or a phone number to reach them?` };
+      }
+      const top = matches[0];
+      office = { name: top.displayName, phone: top.phone ?? undefined, website: top.website ?? undefined, address: top.address ?? undefined };
     }
 
-    const top = matches[0];
-    const forWhom = member.id === ctx.members[0]?.id ? "you" : member.name;
-    const where = [top.displayName, top.address].filter(Boolean).join(" — ");
-    const alt = matches.length > 1 ? " (not it? name the office and I'll use that)" : "";
+    // ---- Pre-call readiness: make sure we have what the office will ask for BEFORE we dial, so the
+    // call doesn't dead-end on missing insurance/timing. Pull what's on file; ask for the rest. ----
+    const onFile = await onFileDetails(member.id);
+    const chatCarrier = args.insurance_carrier?.trim();
+    const chatMemberId = args.insurance_member_id?.trim();
+    const chatDob = args.dob?.trim();
+    const haveInsurance = Boolean((chatCarrier && chatMemberId) || (onFile.carrier && onFile.hasMemberId));
+    const haveDob = Boolean(chatDob || onFile.dob);
+    const skip = /\b(just call|go ahead anyway|don'?t have|skip( that| it)?|no insurance|self[- ]?pay|call anyway|without it|cash pay)\b/i.test(ctx.text);
+
+    if (!skip) {
+      const missing: string[] = [];
+      if (!haveInsurance) missing.push("your insurance (carrier + member ID)");
+      if (!preferred) missing.push("a preferred day or time window");
+      if (!haveDob) missing.push(`${forWhom === "you" ? "your" : `${forWhom}'s`} date of birth`);
+      if (missing.length) {
+        const have: string[] = [];
+        if (haveDob) have.push("date of birth");
+        if (haveInsurance) have.push("insurance");
+        if (preferred) have.push(`timing (${preferred})`);
+        const haveLine = have.length ? ` (I've already got ${joinList(have)}.)` : "";
+        return {
+          kind: "reply",
+          text: `Happy to call ${office.name}. So they don't turn us away, I'll need ${joinList(missing)}.${haveLine}`,
+        };
+      }
+    }
+
+    // Ready — propose the call with everything gathered. Pass chat-provided details through; on-file
+    // ones are used automatically by the booking layer.
+    const officeLabel = office.name === "the office" ? "the office" : office.name;
+    const where = office.address ? ` (${office.address})` : office.phone ? ` at ${office.phone}` : "";
     return {
       kind: "propose",
       action: {
         tool: "book_appointment",
         args: {
           reason,
-          provider: top.displayName,
-          phone: top.phone ?? undefined,
-          website: top.website ?? undefined,
+          provider: office.name === "the office" ? undefined : office.name,
+          phone: office.phone,
+          website: office.website,
           preferredTimes: preferred || undefined,
+          insurance: chatCarrier || undefined,
+          memberId: chatMemberId || undefined,
+          dob: chatDob || undefined,
         },
         subjectUserId: member.id,
-        restatement: `I found ${where}${top.phone ? `, ${top.phone}` : ""}. Book ${reason} there for ${forWhom}${preferred ? ` (${preferred})` : ""}? Reply YES to confirm.${alt}`,
+        restatement: `All set — I'll call ${officeLabel}${where} to book ${reason} for ${forWhom}${preferred ? `, ${preferred}` : ""}, with ${forWhom === "you" ? "your" : "their"} details ready. Reply YES and I'll call now.`,
       },
     };
   },
 };
+
+/** What's already on file for a member — used to decide what the agent still needs to ask for. */
+async function onFileDetails(memberId: string): Promise<{ dob: string | null; carrier: string | null; hasMemberId: boolean }> {
+  const [user, profile] = await Promise.all([
+    prisma.user.findUnique({ where: { id: memberId }, select: { dob: true } }),
+    prisma.profile.findFirst({
+      where: { userId: memberId },
+      orderBy: { isPrimary: "desc" },
+      include: { insurance: { orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }] } },
+    }),
+  ]);
+  const plan = profile?.insurance?.[0];
+  const dob = profile?.dob || (user?.dob ? user.dob.toISOString().slice(0, 10) : null);
+  return { dob, carrier: plan?.carrier ?? null, hasMemberId: Boolean(plan?.memberIdEnc) };
+}
+
+/** "A", "A and B", "A, B and C" */
+function joinList(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
 
 /** The member's saved address (falls back to the operator's) to bias an office search by location. */
 async function memberLocation(memberId: string, operatorId: string): Promise<string | null> {

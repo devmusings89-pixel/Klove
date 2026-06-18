@@ -31,3 +31,7 @@ ios/Svasa.xcodeproj/
 **/.swiftpm/
 DerivedData/
 *.xcarchive
+
+# ---- WhatsApp (Baileys) session credentials — sensitive, never commit ----
+**/.baileys-auth/
+**/.baileys-probe/

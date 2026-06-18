@@ -50,8 +50,9 @@ export async function rememberFromTurn(userId: string, householdId: string, user
     system:
       "You maintain a family health concierge's long-term memory about a caregiver. From the user's message, extract " +
       "ONLY durable preferences or stable facts worth remembering across future conversations: scheduling preferences, " +
-      "preferred providers/offices/pharmacies, insurance choices, how they want to be addressed, standing constraints. " +
-      "Do NOT save one-off requests, questions, greetings, or clinical/medical values. Empty list if nothing durable.\n" +
+      "preferred providers/offices/pharmacies, insurance carrier (e.g. 'Uses Aetna'), how they want to be addressed, " +
+      "standing constraints. Do NOT save one-off requests, questions, greetings, clinical/medical values, or sensitive " +
+      "identifiers like insurance member IDs, subscriber numbers, or dates of birth. Empty list if nothing durable.\n" +
       `Already known (do not duplicate): ${existing.join("; ") || "none"}`,
     content: userText,
     tool: MEMORY_TOOL,
