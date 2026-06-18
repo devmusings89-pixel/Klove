@@ -180,13 +180,22 @@ final class AuthService: NSObject {
         // The emailed link must redirect BACK INTO the app (klove://auth-callback), not the project's
         // Site URL. GoTrue only honors `redirect_to` when it's on the dashboard's Redirect URLs
         // allowlist — otherwise it silently falls back to the Site URL (e.g. localhost:3000).
+        //
+        // Use PKCE: send a code_challenge so the verify link redirects with `?code=…` in the QUERY,
+        // which (unlike an implicit-flow `#access_token` fragment) survives Safari's redirect to a
+        // custom scheme. completeMagicLink() exchanges the code + stored verifier for a session.
+        let verifier = Self.randomNonce(64)
+        KeychainStore.set(verifier, for: Self.pkceVerifierKey)
         let redirect = Self.authCallback.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? Self.authCallback
         guard let url = URL(string: "\(Config.supabaseURL)/auth/v1/otp?redirect_to=\(redirect)") else { return false }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: ["email": trimmed, "create_user": true])
+        req.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "email": trimmed, "create_user": true,
+            "code_challenge": Self.codeChallenge(verifier), "code_challenge_method": "S256",
+        ])
         let status = ((try? await URLSession.shared.data(for: req))?.1 as? HTTPURLResponse)?.statusCode ?? 500
         if status < 300 { errorMessage = nil; return true }
         errorMessage = "Couldn't send your link. Please try again."
@@ -197,18 +206,66 @@ final class AuthService: NSObject {
     /// Redirect URLs, and `klove` is registered in Info.plist's CFBundleURLSchemes.
     static let authCallback = "klove://auth-callback"
 
+    /// Keychain key for the PKCE code_verifier held between requesting a magic link and the callback.
+    private static let pkceVerifierKey = "pkceVerifier"
+
     /// Complete a magic-link / email-OTP sign-in from the app's callback URL. The session tokens come
     /// back in the URL fragment (implicit flow), e.g.
     ///   klove://auth-callback#access_token=…&refresh_token=…&type=magiclink
     /// Returns false (so other onOpenURL handlers can run) when this isn't an auth callback.
     @discardableResult
     func completeMagicLink(from url: URL) -> Bool {
-        guard url.scheme == "klove", let token = Self.fragmentParam(url, "access_token") else { return false }
+        guard url.scheme == "klove" else { return false }
+        // PKCE: the verify redirect returns `?code=…` in the QUERY (survives Safari→custom-scheme,
+        // unlike a fragment). Exchange it (async) for a session.
+        if let code = Self.queryParam(url, "code") {
+            Task { await exchangePKCE(code: code) }
+            return true
+        }
+        // Implicit fallback: tokens in the fragment.
+        if let token = Self.fragmentParam(url, "access_token") {
+            KeychainStore.set(token, for: AppStorageKey.authToken)
+            UserDefaults.standard.set(Self.emailFromJWT(token) ?? email, forKey: AppStorageKey.userEmail)
+            isAuthenticated = true
+            errorMessage = nil
+            return true
+        }
+        // An auth callback with an error — surface it instead of silently staying on the login screen.
+        if let err = Self.queryParam(url, "error_description") ?? Self.fragmentParam(url, "error_description")
+            ?? Self.queryParam(url, "error") ?? Self.fragmentParam(url, "error") {
+            let low = err.lowercased()
+            errorMessage = (low.contains("expired") || low.contains("invalid") || low.contains("used"))
+                ? "That sign-in link expired or was already used. Please request a new one."
+                : "Sign-in didn't complete. Please try again."
+            return true
+        }
+        return false
+    }
+
+    /// Exchange a PKCE auth code (from the verify redirect) + stored verifier for a Supabase session.
+    private func exchangePKCE(code: String) async {
+        guard let verifier = KeychainStore.get(Self.pkceVerifierKey),
+              let url = URL(string: "\(Config.supabaseURL)/auth/v1/token?grant_type=pkce") else {
+            errorMessage = "Couldn't finish sign-in. Please request a new link."
+            return
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["auth_code": code, "code_verifier": verifier])
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let token = json["access_token"] as? String else {
+            errorMessage = "That sign-in link expired or was already used. Please request a new one."
+            return
+        }
+        KeychainStore.remove(Self.pkceVerifierKey)
         KeychainStore.set(token, for: AppStorageKey.authToken)
         UserDefaults.standard.set(Self.emailFromJWT(token) ?? email, forKey: AppStorageKey.userEmail)
         isAuthenticated = true
         errorMessage = nil
-        return true
     }
 
     private func emailAuth(path: String, email: String, password: String, isSignup: Bool) async -> Bool {
@@ -343,6 +400,20 @@ final class AuthService: NSObject {
 
     private static func sha256(_ input: String) -> String {
         SHA256.hash(data: Data(input.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// PKCE S256 challenge: base64url(SHA256(verifier)), no padding.
+    private static func codeChallenge(_ verifier: String) -> String {
+        Data(SHA256.hash(data: Data(verifier.utf8)))
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    /// Read a query-string param from a callback URL (`klove://auth-callback?code=…`).
+    private static func queryParam(_ url: URL, _ key: String) -> String? {
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == key }?.value
     }
 
     /// Read a param from an OAuth callback URL fragment (`klove://auth-callback#access_token=…&…`).

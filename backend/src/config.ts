@@ -137,7 +137,8 @@ export const enabled = {
   web: () => (config.webAgent.provider === "openai-compatible" ? true : Boolean(config.anthropicApiKey)),
   apns: () => Boolean(config.apns.keyId && config.apns.teamId && config.apns.bundleId && config.apns.keyPath),
   supabase: () => Boolean(config.supabase.url && config.supabase.serviceRoleKey),
-  supabaseAuth: () => Boolean(config.supabase.jwtSecret),
+  // Auth is "live" with either the legacy HS256 secret OR the project URL (asymmetric keys → JWKS).
+  supabaseAuth: () => Boolean(config.supabase.jwtSecret || config.supabase.url),
   gmail: () => Boolean(config.google.clientId && config.google.clientSecret && config.google.redirectUri),
   aggregator: () => Boolean(config.aggregator.apiKey && config.aggregator.baseUrl),
   // Any analysis LLM is configured: OpenRouter (preferred), native Anthropic, or an
