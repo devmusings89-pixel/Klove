@@ -112,6 +112,86 @@ export async function runText(opts: { system: string; content: LlmContent; maxTo
   return (json.choices?.[0]?.message?.content ?? "").trim();
 }
 
+// ---- Multi-tool agent turn (provider-agnostic) ----
+//
+// One model turn with MULTIPLE tools available and tool_choice="auto" (the model may answer in text
+// OR pick a tool). Returns the assistant text plus any tool calls it made. The agent service drives
+// the loop on top of this: execute read-only tools and ask again, or short-circuit state-changing
+// tools into the confirm-before-execute gate. Returns null when no LLM is configured.
+
+export interface AgentToolCall {
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+export interface AgentTurn {
+  text: string;
+  toolCalls: AgentToolCall[];
+  stopReason: string;
+}
+
+export type AgentMessage = { role: "user" | "assistant"; content: string };
+
+export async function runAgent(opts: {
+  system: string;
+  messages: AgentMessage[];
+  tools: ToolSpec[];
+  maxTokens?: number;
+}): Promise<AgentTurn | null> {
+  const ep = resolveLlm();
+  if (!ep) return null;
+  return ep.mode === "anthropic" ? anthropicRunAgent(ep, opts) : openAiRunAgent(ep, opts);
+}
+
+async function anthropicRunAgent(ep: LlmEndpoint, opts: { system: string; messages: AgentMessage[]; tools: ToolSpec[]; maxTokens?: number }): Promise<AgentTurn> {
+  const client = new Anthropic({ apiKey: ep.apiKey });
+  const resp = await client.messages.create({
+    model: ep.model,
+    max_tokens: opts.maxTokens ?? 1024,
+    system: opts.system,
+    tools: opts.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.input_schema as Anthropic.Tool.InputSchema })),
+    messages: opts.messages.map((m) => ({ role: m.role, content: m.content })),
+  });
+  const text = resp.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
+  const toolCalls: AgentToolCall[] = [];
+  for (const b of resp.content) {
+    if (b.type === "tool_use") toolCalls.push({ id: b.id, name: b.name, input: (b.input ?? {}) as Record<string, unknown> });
+  }
+  return { text, toolCalls, stopReason: resp.stop_reason ?? "" };
+}
+
+async function openAiRunAgent(ep: LlmEndpoint, opts: { system: string; messages: AgentMessage[]; tools: ToolSpec[]; maxTokens?: number }): Promise<AgentTurn> {
+  const res = await fetch(`${ep.baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: openAiHeaders(ep),
+    body: JSON.stringify({
+      model: ep.model,
+      max_tokens: opts.maxTokens ?? 1024,
+      messages: [{ role: "system", content: opts.system }, ...opts.messages.map((m) => ({ role: m.role, content: m.content }))],
+      tools: opts.tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.input_schema } })),
+      tool_choice: "auto",
+      stream: false,
+    }),
+  });
+  if (!res.ok) throw new Error(`LLM endpoint ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const json = (await res.json()) as {
+    choices?: { finish_reason?: string; message?: { content?: string; tool_calls?: { id?: string; function: { name: string; arguments: string } }[] } }[];
+  };
+  const msg = json.choices?.[0]?.message;
+  const toolCalls: AgentToolCall[] = [];
+  for (const call of msg?.tool_calls ?? []) {
+    let input: Record<string, unknown> = {};
+    try {
+      input = JSON.parse(call.function.arguments || "{}") as Record<string, unknown>;
+    } catch {
+      input = {};
+    }
+    toolCalls.push({ id: call.id ?? call.function.name, name: call.function.name, input });
+  }
+  return { text: (msg?.content ?? "").trim(), toolCalls, stopReason: json.choices?.[0]?.finish_reason ?? "" };
+}
+
 // ---- Anthropic (native Messages API) ----
 
 async function anthropicRunTool<T>(ep: LlmEndpoint, opts: { system: string; content: LlmContent; tool: ToolSpec; maxTokens?: number }): Promise<T | null> {

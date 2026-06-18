@@ -35,28 +35,28 @@ after(async () => {
   await prisma.$disconnect();
 });
 
-test("simulated booking creates a confirmed appointment + handled task", async () => {
+test("booking without a reachable office creates a needs-you task, not a fabricated appointment", async () => {
   const op = await mkOperator("book");
   const out = await bookAppointment(op.id, op.id, op.householdId, {
     reason: "Eye exam",
     preferredDate: new Date(Date.now() + 7 * 86_400_000).toISOString(),
   });
-  assert.equal(out.status, "confirmed");
-  assert.ok(out.appointmentId);
-  const appt = await prisma.appointment.findUnique({ where: { id: out.appointmentId! } });
-  assert.equal(appt?.status, "scheduled");
+  // No live contact + LIVE_BOOKING off → needs_info; Klove never fabricates a provisional appointment.
+  assert.equal(out.status, "needs_info");
+  assert.equal(out.appointmentId, undefined);
+  assert.equal(await prisma.appointment.count({ where: { userId: op.id } }), 0);
   const task = await prisma.task.findUnique({ where: { id: out.taskId } });
-  assert.equal(task?.state, "handled");
+  assert.equal(task?.state, "needs_you");
+  assert.equal(task?.kind, "book");
 });
 
-test("booking is free and a simulated hold is marked unverified (no payment gate)", async () => {
+test("booking never fabricates a provisional appointment", async () => {
   const op = await mkOperator("free");
   const out = await bookAppointment(op.id, op.id, op.householdId, { reason: "Dental cleaning" });
-  // No payment_required status anywhere — the $5 gate is gone.
-  assert.equal(out.status, "confirmed");
-  // A simulated booking must be flagged unverified so the UI can label it a provisional hold.
+  assert.equal(out.status, "needs_info");
   assert.equal(out.verified, false);
-  assert.ok(out.sessionId, "exposes the session id for live progress");
+  assert.equal(out.appointmentId, undefined);
+  assert.equal(await prisma.appointment.count({ where: { userId: op.id } }), 0);
 });
 
 test("auto-reminders generate for an upcoming appointment and fire into a message", async () => {

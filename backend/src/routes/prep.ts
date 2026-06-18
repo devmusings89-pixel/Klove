@@ -78,8 +78,8 @@ export async function prepRoutes(app: FastifyInstance) {
   );
 
   // Book on the member's behalf (concierge). Live (Vapi/web/email) when LIVE_BOOKING is on and we can
-  // reach the office; otherwise a provisional hold (verified:false) the office must still confirm.
-  // The outcome distinguishes the two so the client never presents a hold as a confirmed booking.
+  // reach the office; otherwise the outcome is "needs_info" and a task is surfaced to finish it.
+  // Klove never fabricates a provisional appointment — status is "in_progress" or "needs_info".
   app.post<{ Params: { id: string }; Body: { reason?: string; provider?: string; preferredDate?: string; preferredTimes?: string; phone?: string; website?: string; insurancePlanId?: string } }>(
     "/members/:id/book",
     { preHandler: requireUser },

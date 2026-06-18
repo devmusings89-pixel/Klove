@@ -136,6 +136,43 @@ function categoriesCover(categoriesJson: string, category?: string): boolean {
 }
 
 /**
+ * Resolve the subject member for a caller (no FastifyRequest) and assert the caller may act on them.
+ * This is the single consent implementation; resolveSubject() is a thin request-wrapper over it. Use
+ * this from non-HTTP callers (e.g. the WhatsApp concierge agent) so they enforce the SAME consent
+ * rules as the REST routes and can never become a consent bypass.
+ *
+ * @param callerUserId   the authenticated actor (operator)
+ * @param subjectUserId  target member; defaults to the caller themselves (self)
+ * @param opts.need      minimum access level required (default "view")
+ * @param opts.category  consent category the operation touches (e.g. "records" | "appointments")
+ */
+export async function resolveSubjectFor(
+  callerUserId: string,
+  subjectUserId?: string,
+  opts: { need?: AccessLevel; category?: string } = {},
+): Promise<SubjectContext> {
+  if (!callerUserId) throw new ConsentError("unauthenticated");
+  const target = subjectUserId ?? callerUserId;
+  const need = opts.need ?? "view";
+
+  // Self-access is always full; no grant required.
+  if (target === callerUserId) {
+    return { userId: target, accessLevel: "operate", self: true };
+  }
+
+  const grant = await prisma.consentGrant.findFirst({
+    where: { granteeUserId: callerUserId, subjectUserId: target, status: "active" },
+  });
+  if (!grant) throw new ConsentError("no active consent for this member");
+
+  const level = grant.accessLevel as AccessLevel;
+  if (LEVEL_RANK[level] < LEVEL_RANK[need]) throw new ConsentError("insufficient access level");
+  if (!categoriesCover(grant.categories, opts.category)) throw new ConsentError("category not consented");
+
+  return { userId: target, accessLevel: level, self: false };
+}
+
+/**
  * Resolve the subject member for a household-scoped request and assert the caller may act on them.
  * Defaults the subject to the caller themselves. Throws ConsentError (403) when not permitted.
  *
@@ -148,26 +185,8 @@ export async function resolveSubject(
   subjectUserId?: string,
   opts: { need?: AccessLevel; category?: string } = {},
 ): Promise<SubjectContext> {
-  const caller = req.user;
-  if (!caller) throw new ConsentError("unauthenticated");
-  const target = subjectUserId ?? caller.id;
-  const need = opts.need ?? "view";
-
-  // Self-access is always full; no grant required.
-  if (target === caller.id) {
-    return { userId: target, accessLevel: "operate", self: true };
-  }
-
-  const grant = await prisma.consentGrant.findFirst({
-    where: { granteeUserId: caller.id, subjectUserId: target, status: "active" },
-  });
-  if (!grant) throw new ConsentError("no active consent for this member");
-
-  const level = grant.accessLevel as AccessLevel;
-  if (LEVEL_RANK[level] < LEVEL_RANK[need]) throw new ConsentError("insufficient access level");
-  if (!categoriesCover(grant.categories, opts.category)) throw new ConsentError("category not consented");
-
-  return { userId: target, accessLevel: level, self: false };
+  if (!req.user) throw new ConsentError("unauthenticated");
+  return resolveSubjectFor(req.user.id, subjectUserId, opts);
 }
 
 /** Type guard so routes can map a thrown ConsentError to a 403 reply. */

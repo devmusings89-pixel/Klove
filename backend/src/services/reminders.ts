@@ -2,7 +2,8 @@
 // the scheduler tick drains them. In Phase 5 a fired Message also pushes via APNs.
 
 import { prisma } from "../db.js";
-import { sendPushToUser } from "./push.js";
+import { notifyUser } from "./notify.js";
+import { buildBrief } from "./prep.js";
 
 function nextFire(from: Date, repeatRule: string): Date {
   const d = new Date(from);
@@ -40,7 +41,19 @@ export async function runReminderTick(): Promise<number> {
           relatedTaskId: r.taskId ?? undefined,
         },
       });
-      await sendPushToUser(r.subjectUserId, "Klove reminder", r.title);
+      // For appointment-sourced reminders, add a short "what to ask" prep so the message stands on
+      // its own over chat (the spec's reminder + prep summary). Best-effort; never blocks the fire.
+      let body = r.title;
+      if (r.sourceAppointmentId) {
+        try {
+          const brief = await buildBrief(r.subjectUserId, r.sourceAppointmentId);
+          const qs = brief.questions.slice(0, 2);
+          if (qs.length) body += `\n\nWorth asking:\n${qs.map((q) => `• ${q}`).join("\n")}`;
+        } catch (err) {
+          console.error("reminder prep enrichment failed", err);
+        }
+      }
+      await notifyUser(r.subjectUserId, { title: "Klove reminder", body });
     }
     if (r.repeatRule) {
       await prisma.reminder.update({ where: { id: r.id }, data: { fireAt: nextFire(r.fireAt, r.repeatRule) } });

@@ -22,11 +22,14 @@ import { prepRoutes } from "./routes/prep.js";
 import { askRoutes } from "./routes/ask.js";
 import { deviceRoutes } from "./routes/devices.js";
 import { preferenceRoutes } from "./routes/preferences.js";
+import { whatsappRoutes } from "./routes/whatsapp.js";
 import { runSchedulerTick } from "./services/orchestrator.js";
 import { runExtractionTick, runIngestionTick } from "./services/health-worker.js";
 import { runReminderTick, autoGenerateReminders } from "./services/reminders.js";
 import { runMedicationDoseTick, runMissedDoseTick, runRefillTick } from "./services/medications.js";
+import { runProactiveOutreachTick } from "./services/proactive.js";
 import { smsEnabled } from "./services/sms.js";
+import { whatsappEnabled } from "./services/whatsapp.js";
 import { reconcileConciergeJobs } from "./services/concierge.js";
 
 // HIPAA: never log request/response bodies (they carry PHI) and redact identity headers. The
@@ -52,6 +55,20 @@ app.addContentTypeParser("application/json", { parseAs: "buffer" }, (req, body, 
   try {
     const json = body.length ? JSON.parse(body.toString("utf8")) : {};
     done(null, json);
+  } catch (err) {
+    done(err as Error, undefined);
+  }
+});
+
+// Twilio webhooks (WhatsApp) POST application/x-www-form-urlencoded. Capture the raw bytes (for the
+// X-Twilio-Signature check) and expose the params as a flat object on req.body.
+app.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "buffer" }, (req, body, done) => {
+  (req as unknown as { rawBody: Buffer }).rawBody = body as Buffer;
+  try {
+    const params = new URLSearchParams(body.toString("utf8"));
+    const obj: Record<string, string> = {};
+    for (const [k, v] of params) obj[k] = v;
+    done(null, obj);
   } catch (err) {
     done(err as Error, undefined);
   }
@@ -144,6 +161,7 @@ app.get("/health", async () => ({
     vapi: enabled.vapi() ? "live" : "mock",
     stripe: enabled.stripe() ? "live" : "mock",
     resend: enabled.resend() ? "live" : "mock",
+    whatsapp: whatsappEnabled() ? "live" : "mock",
     googlePlaces: enabled.googlePlaces() ? "live" : "mock",
     web: enabled.web() ? `live:${config.webAgent.provider}` : "mock",
     storage: enabled.supabase() ? "live:supabase" : "mock:local",
@@ -178,6 +196,7 @@ await app.register(prepRoutes);
 await app.register(askRoutes);
 await app.register(deviceRoutes);
 await app.register(preferenceRoutes);
+await app.register(whatsappRoutes);
 
 // Fail closed at boot in production: refuse to start if auth would degrade to header-trust, or if
 // the Vapi webhook secret is unset (anyone could POST call results otherwise).
@@ -199,7 +218,7 @@ function simulatedSubsystems(): { name: string; fix: string }[] {
   if (!enabled.healthExtraction())
     out.push({ name: "AI extraction / analysis / Ask / intake / triage (returns deterministic sample data)", fix: "OPENROUTER_API_KEY (or ANTHROPIC_API_KEY)" });
   if (!config.liveBooking)
-    out.push({ name: "Booking concierge (provisional holds only, never contacts an office)", fix: "LIVE_BOOKING=true" });
+    out.push({ name: "Booking concierge (LIVE_BOOKING off — Klove can't place bookings, only logs a task)", fix: "LIVE_BOOKING=true" });
   else if (!enabled.vapi())
     out.push({ name: "Booking voice calls (live booking on, but Vapi unconfigured)", fix: "VAPI_API_KEY + VAPI_ASSISTANT_ID + VAPI_PHONE_NUMBER_ID" });
   if (!config.vapi.webhookSecret)
@@ -212,6 +231,8 @@ function simulatedSubsystems(): { name: string; fix: string }[] {
     out.push({ name: "Email sending (logged, not delivered)", fix: "RESEND_API_KEY" });
   if (!smsEnabled())
     out.push({ name: "SMS sending (logged, not delivered)", fix: "TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_FROM_NUMBER" });
+  if (!whatsappEnabled())
+    out.push({ name: "WhatsApp concierge sending (logged, not delivered)", fix: "TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_WHATSAPP_FROM" });
   if (!enabled.apns())
     out.push({ name: "Push notifications (no-op)", fix: "APNS_KEY_ID + APNS_TEAM_ID + APNS_BUNDLE_ID + APNS_KEY_PATH" });
   if (!enabled.supabase())
@@ -253,6 +274,7 @@ app
       runMedicationDoseTick().catch((err) => app.log.error({ err }, "med dose tick failed"));
       runMissedDoseTick().catch((err) => app.log.error({ err }, "missed dose tick failed"));
       runRefillTick().catch((err) => app.log.error({ err }, "refill tick failed"));
+      runProactiveOutreachTick().catch((err) => app.log.error({ err }, "proactive outreach tick failed"));
     }, 60_000);
     // Health pipeline workers: poll pollable sources + drain the extraction queue.
     setInterval(() => {

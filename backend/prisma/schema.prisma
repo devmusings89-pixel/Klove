@@ -39,6 +39,14 @@ model User {
   pushEnabled       Boolean                @default(true) // notification preference
   reminderLeadHours Int                    @default(24) // how far before an appointment to remind
   timezone          String? // IANA tz (e.g. "America/New_York") for dose scheduling; falls back to server tz
+  // ---- WhatsApp concierge channel ----
+  // The number that reaches this user on WhatsApp (E.164). Set + verified from the app, then used to
+  // route inbound messages back to this User and to send proactive outreach.
+  whatsappPhone         String?            @unique
+  whatsappVerified      Boolean            @default(false)
+  whatsappEnabled       Boolean            @default(true) // per-channel proactive preference (mirrors pushEnabled)
+  lastWhatsappInboundAt DateTime? // last inbound message — gates the 24h business-initiated window
+  lastProactiveAt       DateTime? // throttles the daily proactive-outreach tick to once per user per day
   createdAt         DateTime               @default(now())
   sessions          Session[]
   connections       DataSourceConnection[]
@@ -628,4 +636,24 @@ model Message {
 
   @@index([householdId, createdAt])
   @@index([subjectUserId, readAt])
+}
+
+// Transient state for the WhatsApp concierge agent: one live conversation per user. Turn *content*
+// lives in Message (channel="whatsapp"); this row holds only the agent's working state — chiefly the
+// pending action awaiting the user's "yes/no" confirmation. Confirm-before-execute is enforced here.
+model AgentConversation {
+  id               String    @id @default(cuid())
+  userId           String    @unique // the WhatsApp-identified user (operator)
+  householdId      String
+  // JSON: { tool, args, subjectUserId, restatement, createdAt }. Set when a state-changing action is
+  // proposed; cleared on confirm/cancel/expiry. The orchestrator never executes without this gate.
+  pendingAction    String?
+  pendingExpiresAt DateTime?
+  // Durable cross-session memory: JSON array of standing preferences/facts the agent has learned
+  // about the caregiver (scheduling prefs, preferred providers, insurance, how to address them).
+  // Loaded into context every turn; survives across conversations (this row is never deleted).
+  memoryJson       String?
+  lastTurnAt       DateTime  @default(now())
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 }

@@ -11,7 +11,7 @@
 
 import { prisma } from "../db.js";
 import { fromJson } from "./json.js";
-import { sendPushToUser } from "./push.js";
+import { notifyUser } from "./notify.js";
 
 const FRESH_REMINDER_MIN = 60; // only push "time for your dose" within this long after the slot
 const GRACE_MIN = 120; // a pending dose older than this is "missed"
@@ -130,7 +130,7 @@ export async function runMedicationDoseTick(now: Date = new Date()): Promise<num
   // One batched push per member; critical meds force past the quiet-notification preference.
   for (const [subjectUserId, { labels, critical }] of reminders) {
     const body = labels.length === 1 ? `Time for ${labels[0]}` : `Time for ${labels.length} medications: ${labels.join(", ")}`;
-    await sendPushToUser(subjectUserId, "Medication reminder", body, critical).catch((e) => console.error("dose reminder push failed", e));
+    await notifyUser(subjectUserId, { title: "Medication reminder", body, force: critical }).catch((e) => console.error("dose reminder notify failed", e));
   }
   return created;
 }
@@ -173,7 +173,7 @@ export async function runMissedDoseTick(now: Date = new Date()): Promise<number>
         },
       });
       // Critical misses bypass the general push preference; routine ones respect it.
-      await sendPushToUser(care.operatorUserId, critical ? "Missed critical dose" : "Missed dose", body, critical);
+      await notifyUser(care.operatorUserId, { title: critical ? "Missed critical dose" : "Missed dose", body, force: critical });
       alerted++;
     } catch (err) {
       console.error("missed-dose alert failed for dose", dose.id, err);
@@ -214,7 +214,7 @@ export async function runRefillTick(now: Date = new Date()): Promise<number> {
       await prisma.message.create({
         data: { householdId: care.householdId, subjectUserId: med.userId, direction: "out", channel: "inapp", title: "Refill due soon", body },
       });
-      await sendPushToUser(care.operatorUserId, "Refill due soon", body);
+      await notifyUser(care.operatorUserId, { title: "Refill due soon", body });
       nudged++;
     } catch (err) {
       console.error("refill nudge failed for med", med.id, err);

@@ -1,9 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../db.js";
 import { requireUser, resolveSubject, isConsentError } from "../services/auth.js";
-import { accessibleSubjects } from "../services/household.js";
 import { buildTimeline, buildSeries } from "../services/graph.js";
-import { triageAsk } from "../services/triage.js";
+import { askKlove } from "../services/agent.js";
 import { runText, llmAvailable } from "../services/llm-tool.js";
 
 /**
@@ -15,36 +14,18 @@ export async function askRoutes(app: FastifyInstance) {
   app.post<{ Body: { text: string } }>("/ask", { preHandler: requireUser }, async (req, reply) => {
     const text = req.body?.text?.trim();
     if (!text) return reply.code(400).send({ error: "text required" });
-    const members = await accessibleSubjects(req.user!.id);
 
-    const result = await triageAsk(text, members);
+    // Same concierge brain as WhatsApp: classify → specialist subagent. Informational asks answer;
+    // actionable asks (booking) execute (booking is operator-authorized) and return the tracking task.
+    const result = await askKlove(req.user!.id, text);
 
-    // Record the request.
+    // Record the request for the Actions/audit history (matches prior /ask behavior).
     const householdId = (await prisma.household.findUnique({ where: { operatorUserId: req.user!.id } }))?.id;
     await prisma.request.create({
       data: { operatorUserId: req.user!.id, householdId, text, kind: "ask", responseJson: JSON.stringify(result), status: result.kind === "escalated" ? "escalated" : "resolved" },
     });
 
-    // Escalation actually DOES something: open a concierge job + a waiting task so it shows in Actions.
-    let taskId: string | undefined;
-    if (result.kind === "escalated" && householdId) {
-      const session = await prisma.session.create({
-        data: { userId: req.user!.id, tier: "human", kind: "booking", status: "draft", patientInfo: JSON.stringify({ reason: text }) },
-      });
-      const task = await prisma.task.create({
-        data: {
-          subjectUserId: req.user!.id,
-          householdId,
-          title: `Klove is handling: ${text.slice(0, 60)}`,
-          detail: result.answer,
-          state: "waiting",
-          kind: "book",
-          conciergeJobId: session.id,
-        },
-      });
-      taskId = task.id;
-    }
-    return reply.send({ ...result, taskId });
+    return reply.send(result);
   });
 
   // "Show me X for <member>": a focused, grounded view (filtered timeline) — not a dashboard.
@@ -86,6 +67,35 @@ export async function askRoutes(app: FastifyInstance) {
         }).catch(() => null);
       }
       return reply.send({ title: query || "Recent activity", count: entries.length, entries, series, summary });
+    },
+  );
+
+  // "Add to <member>'s brief": pin a Show-me finding onto the Today briefing as a review task.
+  app.post<{ Params: { id: string }; Body: { title: string; detail?: string } }>(
+    "/members/:id/brief",
+    { preHandler: requireUser },
+    async (req, reply) => {
+      let userId: string;
+      try {
+        userId = (await resolveSubject(req, req.params.id, { need: "view", category: "records" })).userId;
+      } catch (err) {
+        return reply.code(isConsentError(err) ? 403 : 500).send({ error: "forbidden" });
+      }
+      const title = (req.body?.title ?? "").trim();
+      if (!title) return reply.code(400).send({ error: "title required" });
+      const householdId = (await prisma.household.findUnique({ where: { operatorUserId: req.user!.id } }))?.id;
+      if (!householdId) return reply.code(400).send({ error: "no household" });
+      const task = await prisma.task.create({
+        data: {
+          subjectUserId: userId,
+          householdId,
+          title,
+          detail: req.body?.detail?.trim() || null,
+          kind: "review",
+          state: "needs_you",
+        },
+      });
+      return reply.send({ ok: true, id: task.id });
     },
   );
 }

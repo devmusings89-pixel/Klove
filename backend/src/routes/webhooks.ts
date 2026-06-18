@@ -11,6 +11,9 @@ import { ingestArtifact } from "../services/ingestion.js";
 import { syncConnection } from "../services/health-worker.js";
 import { encryptToken } from "../services/crypto.js";
 import { exchangeCodeForTokens, getGmailProfile } from "../services/google.js";
+import { sendWhatsApp, verifyTwilioSignature, twilioAuthConfigured } from "../services/whatsapp.js";
+import { toE164 } from "../services/phone.js";
+import { resolveUserByWhatsapp, handleInboundMessage } from "../services/agent.js";
 
 export async function webhookRoutes(app: FastifyInstance) {
   // ---- Stripe ----
@@ -89,6 +92,43 @@ export async function webhookRoutes(app: FastifyInstance) {
     }
 
     return reply.send({ received: true });
+  });
+
+  // ---- WhatsApp (concierge agent inbound) ----
+  // Twilio POSTs form-encoded inbound messages here. We verify the X-Twilio-Signature, resolve the
+  // user by phone, hand the text to the concierge agent, and reply over REST (the agent loop can
+  // outlast Twilio's webhook timeout). The webhook itself returns an empty TwiML <Response/> at once.
+  app.post("/webhooks/whatsapp", async (req, reply) => {
+    const xml = (body = "") => reply.header("content-type", "text/xml").send(`<?xml version="1.0" encoding="UTF-8"?><Response>${body}</Response>`);
+
+    // Signature verification: mandatory in production; optional in dev (no auth token configured).
+    if (twilioAuthConfigured()) {
+      const sig = req.headers["x-twilio-signature"] as string | undefined;
+      const url = `${config.publicBaseUrl}/webhooks/whatsapp`;
+      if (!verifyTwilioSignature(url, (req.body as Record<string, string>) ?? {}, sig)) {
+        return reply.code(403).send({ error: "invalid_signature" });
+      }
+    } else if (isProduction) {
+      return reply.code(503).send({ error: "webhook_not_configured" });
+    }
+
+    const body = (req.body ?? {}) as Record<string, string>;
+    const from = toE164((body.From ?? "").replace(/^whatsapp:/, ""));
+    const text = (body.Body ?? "").trim();
+    if (!from || !text) return xml();
+
+    const user = await resolveUserByWhatsapp(from);
+    if (!user) {
+      // Unknown number: one generic reply, never create a user from inbound (anti-abuse).
+      await sendWhatsApp(from, "This number isn't linked to a Klove account yet. Open the Klove app to connect it.").catch(() => {});
+      return xml();
+    }
+
+    // Run the agent out-of-band so the webhook returns fast; deliver the reply over REST.
+    handleInboundMessage(user, text)
+      .then((response) => sendWhatsApp(from, response))
+      .catch((err) => app.log.error({ err }, "whatsapp agent failed"));
+    return xml();
   });
 
   // ---- Gmail (email source) ----
