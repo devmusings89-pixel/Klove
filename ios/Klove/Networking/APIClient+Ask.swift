@@ -24,6 +24,13 @@ struct WhatsAppEnrollResult: Decodable {
     let verificationSent: Bool
 }
 
+/// Current WhatsApp link status returned by GET /whatsapp/enroll.
+struct WhatsAppStatus: Decodable {
+    let phone: String?
+    let verified: Bool
+    let enabled: Bool
+}
+
 /// A numeric trend for charting (e.g. blood pressure over time).
 struct ShowMeSeries: Decodable {
     let display: String
@@ -55,6 +62,10 @@ extension APIClient {
     /// Link a WhatsApp number to the account. The backend stores it and sends a "reply YES to connect"
     /// message; the inbound webhook verifies it, after which the WhatsApp concierge agent takes over.
     @discardableResult
+    func getWhatsAppStatus() async throws -> WhatsAppStatus {
+        try await get("/whatsapp/enroll")
+    }
+
     func enrollWhatsApp(phone: String) async throws -> WhatsAppEnrollResult {
         try await post("/whatsapp/enroll", body: ["phone": phone])
     }

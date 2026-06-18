@@ -13,6 +13,12 @@ struct SettingsView: View {
     @State private var saveError: String?
     private let api = APIClient()
 
+    // WhatsApp linking
+    @State private var whatsappStatus: WhatsAppStatus?
+    @State private var whatsappPhone = ""
+    @State private var whatsappAction: WhatsAppAction = .idle
+    enum WhatsAppAction: Equatable { case idle, working, sent, error(String) }
+
     private var email: String { UserDefaults.standard.string(forKey: AppStorageKey.userEmail) ?? "—" }
 
     var body: some View {
@@ -50,6 +56,11 @@ struct SettingsView: View {
             .listRowBackground(Theme.surface)
 
             Section {
+                whatsappSection
+            } header: { sectionHeader("WhatsApp") }
+            .listRowBackground(Theme.surface)
+
+            Section {
                 LabeledContent { Text(appVersion) } label: { Label("Version", systemImage: "info.circle") }
                 Text("Klove surfaces information to discuss with your provider and is not a substitute for medical advice.")
                     .font(.kloveCaption)
@@ -73,6 +84,7 @@ struct SettingsView: View {
                 reminderLead = p.reminderLeadHours
                 lastSaved = (p.pushEnabled, p.reminderLeadHours)
             }
+            whatsappStatus = try? await api.getWhatsAppStatus()
         }
         .onChange(of: pushEnabled) { scheduleSave() }
         .onChange(of: reminderLead) { scheduleSave() }
@@ -101,6 +113,76 @@ struct SettingsView: View {
                 reminderLead = lastSaved.lead
             }
         }
+    }
+
+    @ViewBuilder
+    private var whatsappSection: some View {
+        if let status = whatsappStatus, let phone = status.phone {
+            // Linked — show number + verification state
+            if status.verified {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(phone).font(.kloveBody)
+                        Text("Connected").font(.kloveCaption).foregroundStyle(Theme.inkSecondary)
+                    }
+                } icon: { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) }
+            } else {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(phone).font(.kloveBody)
+                        Text("Awaiting verification — reply YES in WhatsApp").font(.kloveCaption).foregroundStyle(Theme.inkSecondary)
+                    }
+                } icon: { Image(systemName: "clock.fill").foregroundStyle(Theme.inkSecondary) }
+            }
+            Button("Unlink \(phone)", role: .destructive) {
+                Task { await unlinkWhatsApp() }
+            }
+        } else {
+            // Not linked — show phone entry
+            Label {
+                TextField("+1 (555) 123-4567", text: $whatsappPhone)
+                    .keyboardType(.phonePad)
+                    .autocorrectionDisabled()
+            } icon: { Image(systemName: "phone.fill") }
+
+            Button {
+                Task { await linkWhatsApp() }
+            } label: {
+                if whatsappAction == .working {
+                    ProgressView()
+                } else {
+                    Text("Connect WhatsApp")
+                }
+            }
+            .disabled(whatsappPhone.filter(\.isNumber).count < 7 || whatsappAction == .working)
+
+            if case .sent = whatsappAction {
+                Text("Verification sent — reply YES in WhatsApp to confirm.")
+                    .font(.kloveCaption).foregroundStyle(Theme.inkSecondary)
+            }
+            if case .error(let msg) = whatsappAction {
+                Text(msg).font(.kloveCaption).foregroundStyle(.red)
+            }
+        }
+    }
+
+    private func linkWhatsApp() async {
+        whatsappAction = .working
+        do {
+            let result = try await api.enrollWhatsApp(phone: whatsappPhone)
+            whatsappStatus = try? await api.getWhatsAppStatus()
+            whatsappAction = result.verificationSent ? .sent : .idle
+        } catch {
+            whatsappAction = .error("Couldn't connect WhatsApp. Please try again.")
+        }
+    }
+
+    private func unlinkWhatsApp() async {
+        whatsappAction = .working
+        _ = try? await api.disableWhatsApp()
+        whatsappStatus = try? await api.getWhatsAppStatus()
+        whatsappPhone = ""
+        whatsappAction = .idle
     }
 
     private func sectionHeader(_ title: String) -> some View {

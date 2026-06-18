@@ -10,6 +10,19 @@ import { toE164 } from "../services/phone.js";
 import { sendWhatsApp } from "../services/whatsapp.js";
 
 export async function whatsappRoutes(app: FastifyInstance) {
+  // Return the caller's current WhatsApp link status.
+  app.get("/whatsapp/enroll", { preHandler: requireUser }, async (req) => {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.id },
+      select: { whatsappPhone: true, whatsappVerified: true, whatsappEnabled: true },
+    });
+    return {
+      phone: user?.whatsappPhone ?? null,
+      verified: user?.whatsappVerified ?? false,
+      enabled: user?.whatsappEnabled ?? false,
+    };
+  });
+
   // Link (or re-link) a WhatsApp number to the caller and send a verification prompt.
   app.post<{ Body: { phone?: string } }>("/whatsapp/enroll", { preHandler: requireUser }, async (req, reply) => {
     const e164 = toE164(req.body?.phone);
