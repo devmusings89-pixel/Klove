@@ -104,24 +104,9 @@ private struct IdentifyStep: View {
                 OnbBackBar { model.back() }
 
                 Text("Welcome to klove").font(.kloveTitle).foregroundStyle(Theme.ink)
-                Text("Let's get your account set up.").font(.kloveBody).foregroundStyle(Theme.inkSecondary)
+                Text("Sign in to set up your account.").font(.kloveBody).foregroundStyle(Theme.inkSecondary)
 
-                OnbField(label: "Email") {
-                    TextField("Enter your email", text: $model.email)
-                        .focused($emailFocused)
-                        .keyboardType(.emailAddress).textContentType(.emailAddress)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .font(.kloveBody).foregroundStyle(Theme.ink)
-                }
-                .padding(.top, 4)
-
-                OnbField(label: "Password") {
-                    SecureField("At least 6 characters", text: $model.password)
-                        .textContentType(.password)
-                        .font(.kloveBody).foregroundStyle(Theme.ink)
-                }
-
-                // Terms agreement
+                // Terms agreement — required before any sign-in method.
                 HStack(alignment: .top, spacing: 12) {
                     Button { model.agreedToTerms.toggle() } label: {
                         Image(systemName: model.agreedToTerms ? "checkmark.square.fill" : "square")
@@ -138,24 +123,16 @@ private struct IdentifyStep: View {
                         Text("Your data is encrypted and never sold.").font(.kloveCaption.italic()).foregroundStyle(Theme.inkSecondary)
                     }
                 }
-
-                if let error = model.identifyError {
-                    Text(error).font(.kloveCaption).foregroundStyle(.red)
-                }
-
-                Button { Task { await model.continueWithEmailPassword() } } label: {
-                    if model.authBusy { ProgressView().tint(Theme.background) } else { Text("Continue") }
-                }
-                .buttonStyle(OnbButtonStyle(enabled: canContinue))
-                .disabled(!canContinue)
                 .padding(.top, 4)
 
-                OnbOrDivider()
-
+                // Headline: Sign in with Apple.
                 SignInWithAppleButton(.continue) { AuthService.shared.configure($0) }
                     onCompletion: { AuthService.shared.handle($0) }
-                    .signInWithAppleButtonStyle(.whiteOutline)
+                    .signInWithAppleButtonStyle(.black)
                     .frame(height: 54).clipShape(Capsule())
+                    .disabled(!model.agreedToTerms)
+                    .opacity(model.agreedToTerms ? 1 : 0.5)
+                    .padding(.top, 4)
 
                 Button { Task { await AuthService.shared.signInWithGoogle() } } label: {
                     HStack(spacing: 8) {
@@ -166,10 +143,38 @@ private struct IdentifyStep: View {
                     .overlay(Capsule().stroke(Theme.hairline, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
+                .disabled(!model.agreedToTerms)
+                .opacity(model.agreedToTerms ? 1 : 0.5)
 
                 if let authError = AuthService.shared.errorMessage, model.identifyError == nil {
                     Text(authError).font(.kloveCaption).foregroundStyle(.red)
                 }
+
+                OnbOrDivider()
+
+                OnbField(label: "Email") {
+                    TextField("Enter your email", text: $model.email)
+                        .focused($emailFocused)
+                        .keyboardType(.emailAddress).textContentType(.emailAddress)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .font(.kloveBody).foregroundStyle(Theme.ink)
+                }
+
+                OnbField(label: "Password") {
+                    SecureField("At least 6 characters", text: $model.password)
+                        .textContentType(.password)
+                        .font(.kloveBody).foregroundStyle(Theme.ink)
+                }
+
+                if let error = model.identifyError {
+                    Text(error).font(.kloveCaption).foregroundStyle(.red)
+                }
+
+                Button { Task { await model.continueWithEmailPassword() } } label: {
+                    if model.authBusy { ProgressView().tint(Theme.background) } else { Text("Continue with email") }
+                }
+                .buttonStyle(OnbButtonStyle(enabled: canContinue))
+                .disabled(!canContinue)
             }
             .padding(.horizontal, OnbStyle.hMargin).padding(.top, 8).padding(.bottom, 24)
         }
