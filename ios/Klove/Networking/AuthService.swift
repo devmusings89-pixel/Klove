@@ -177,7 +177,11 @@ final class AuthService: NSObject {
             errorMessage = nil
             return true
         }
-        guard let url = URL(string: "\(Config.supabaseURL)/auth/v1/otp") else { return false }
+        // The emailed link must redirect BACK INTO the app (klove://auth-callback), not the project's
+        // Site URL. GoTrue only honors `redirect_to` when it's on the dashboard's Redirect URLs
+        // allowlist — otherwise it silently falls back to the Site URL (e.g. localhost:3000).
+        let redirect = Self.authCallback.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? Self.authCallback
+        guard let url = URL(string: "\(Config.supabaseURL)/auth/v1/otp?redirect_to=\(redirect)") else { return false }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -187,6 +191,24 @@ final class AuthService: NSObject {
         if status < 300 { errorMessage = nil; return true }
         errorMessage = "Couldn't send your link. Please try again."
         return false
+    }
+
+    /// The app's auth deep-link target — must be added to Supabase → Auth → URL Configuration →
+    /// Redirect URLs, and `klove` is registered in Info.plist's CFBundleURLSchemes.
+    static let authCallback = "klove://auth-callback"
+
+    /// Complete a magic-link / email-OTP sign-in from the app's callback URL. The session tokens come
+    /// back in the URL fragment (implicit flow), e.g.
+    ///   klove://auth-callback#access_token=…&refresh_token=…&type=magiclink
+    /// Returns false (so other onOpenURL handlers can run) when this isn't an auth callback.
+    @discardableResult
+    func completeMagicLink(from url: URL) -> Bool {
+        guard url.scheme == "klove", let token = Self.fragmentParam(url, "access_token") else { return false }
+        KeychainStore.set(token, for: AppStorageKey.authToken)
+        UserDefaults.standard.set(Self.emailFromJWT(token) ?? email, forKey: AppStorageKey.userEmail)
+        isAuthenticated = true
+        errorMessage = nil
+        return true
     }
 
     private func emailAuth(path: String, email: String, password: String, isSignup: Bool) async -> Bool {
