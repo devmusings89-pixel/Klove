@@ -124,6 +124,28 @@ final class OnboardingModel {
     /// The 6-digit code the user typed from the email.
     var code = ""
 
+    /// Password for email + password sign-in/sign-up (reliable; no email round-trip).
+    var password = ""
+
+    /// Sign up (or sign in) with email + password — Supabase returns a session directly, so there's
+    /// no email link/code to deliver. On success the OnboardingView isAuthenticated observer advances.
+    func continueWithEmailPassword() async {
+        authBusy = true
+        defer { authBusy = false }
+        identifyError = nil
+        guard agreedToTerms else {
+            identifyError = "Please accept the Terms to continue."
+            return
+        }
+        guard password.count >= 6 else {
+            identifyError = "Password must be at least 6 characters."
+            return
+        }
+        if !(await AuthService.shared.signUpWithEmail(email, password)) {
+            identifyError = AuthService.shared.errorMessage
+        }
+    }
+
     /// Verify the emailed 6-digit code → session. On success, the isAuthenticated observer advances.
     func verifyCode() async {
         authBusy = true

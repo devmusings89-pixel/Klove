@@ -95,7 +95,7 @@ private struct IdentifyStep: View {
     @FocusState private var emailFocused: Bool
 
     private var canContinue: Bool {
-        model.email.contains("@") && model.email.contains(".") && model.agreedToTerms && !model.authBusy
+        model.email.contains("@") && model.email.contains(".") && model.password.count >= 6 && model.agreedToTerms && !model.authBusy
     }
 
     var body: some View {
@@ -114,6 +114,12 @@ private struct IdentifyStep: View {
                         .font(.kloveBody).foregroundStyle(Theme.ink)
                 }
                 .padding(.top, 4)
+
+                OnbField(label: "Password") {
+                    SecureField("At least 6 characters", text: $model.password)
+                        .textContentType(.password)
+                        .font(.kloveBody).foregroundStyle(Theme.ink)
+                }
 
                 // Terms agreement
                 HStack(alignment: .top, spacing: 12) {
@@ -137,32 +143,12 @@ private struct IdentifyStep: View {
                     Text(error).font(.kloveCaption).foregroundStyle(.red)
                 }
 
-                if model.magicLinkSent {
-                    Text("Enter the 6-digit code we emailed to \(model.email).")
-                        .font(.kloveCaption).foregroundStyle(Theme.inkSecondary)
-                    TextField("123456", text: $model.code)
-                        .keyboardType(.numberPad)
-                        .textContentType(.oneTimeCode)
-                        .multilineTextAlignment(.center)
-                        .font(.system(size: 26, weight: .semibold, design: .monospaced))
-                        .padding(.vertical, 14)
-                        .frame(maxWidth: .infinity)
-                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.hairline, lineWidth: 1))
-                    Button { Task { await model.verifyCode() } } label: {
-                        if model.authBusy { ProgressView().tint(Theme.background) } else { Text("Verify code") }
-                    }
-                    .buttonStyle(OnbButtonStyle(enabled: model.code.trimmingCharacters(in: .whitespaces).count >= 6))
-                    .disabled(model.code.trimmingCharacters(in: .whitespaces).count < 6)
-                    Button("Resend code") { Task { await model.continueWithMagicLink() } }
-                        .font(.kloveCaption).foregroundStyle(Theme.accent).padding(.top, 2)
-                } else {
-                    Button { Task { await model.continueWithMagicLink() } } label: {
-                        if model.authBusy { ProgressView().tint(Theme.background) } else { Text("Continue with email") }
-                    }
-                    .buttonStyle(OnbButtonStyle(enabled: canContinue))
-                    .disabled(!canContinue)
-                    .padding(.top, 4)
+                Button { Task { await model.continueWithEmailPassword() } } label: {
+                    if model.authBusy { ProgressView().tint(Theme.background) } else { Text("Continue") }
                 }
+                .buttonStyle(OnbButtonStyle(enabled: canContinue))
+                .disabled(!canContinue)
+                .padding(.top, 4)
 
                 OnbOrDivider()
 
