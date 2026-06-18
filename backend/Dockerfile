@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-cert
 
 # Install node deps (dev deps included so we can build TS + generate the Prisma client).
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --include=dev
 
 COPY . .
 
