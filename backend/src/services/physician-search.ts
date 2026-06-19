@@ -8,10 +8,10 @@
 // quality, not clinical-outcomes data — surfaced in matchReasons and the disclaimer.
 
 import { prisma } from "../db.js";
-import { runTool } from "./llm-tool.js";
+import { runTool, runText } from "./llm-tool.js";
 import { classifySpecialty } from "./providers.js";
 import { searchPhysicians as npiSearch, type NpiPhysician } from "./npi.js";
-import { lookupPlaceRating, type PlaceRating } from "./lookup.js";
+import { lookupPlaceRating, lookupPlaceReviews, geocode, type PlaceRating } from "./lookup.js";
 import { enabled } from "../config.js";
 
 export type NetworkStatus = "in_network" | "out_of_network" | "unconfirmed" | "unknown";
@@ -28,6 +28,7 @@ export interface PhysicianResult {
   website: string | null;
   rating: number | null;
   reviewCount: number | null;
+  distanceMiles: number | null;
   matchReasons: string[];
   networkStatus: NetworkStatus;
   source: "npi" | "mock";
@@ -37,6 +38,11 @@ export interface PhysicianSearchOutput {
   resolvedSpecialty: string | null;
   resolvedSubspecialty: string | null;
   disclaimer: string;
+  /** Klove's plain-language recommendation reading ratings + reviews against the stated need (first page only). */
+  recommendation: string | null;
+  radiusMiles: number | null;
+  hasMore: boolean;
+  nextOffset: number | null;
   results: PhysicianResult[];
 }
 
@@ -154,6 +160,15 @@ export function networkStatus(accepted: string[], member: string[]): NetworkStat
   return accepted.some((a) => member.includes(a)) ? "in_network" : "out_of_network";
 }
 
+// Allied-health credentials that aren't physicians — excluded from a "doctors" search. Blank credentials
+// are kept (some physicians omit it). MD/DO/NP/PA/DPM/DDS/DMD/OD remain.
+const ALLIED_HEALTH = new Set(["pt", "dpt", "pta", "ot", "otr", "ota", "cota", "rn", "lpn", "cna", "rd", "ldn", "lcsw", "msw", "slp", "ccc", "at", "atc", "ma"]);
+function isAlliedHealth(credential: string | null): boolean {
+  if (!credential) return false;
+  const c = credential.replace(/[.\s]/g, "").toLowerCase();
+  return ALLIED_HEALTH.has(c);
+}
+
 // ---- Patient audience (adult vs child) ----
 // The NPI taxonomy is broad ("Neurology"), so an adult migraine search otherwise surfaces pediatric
 // neurologists. We use the member's DOB to drop pediatric-only specialists for adults and prefer them
@@ -196,6 +211,21 @@ export async function patientAudience(subjectUserId: string): Promise<PatientAud
 const RATING_PRIOR_MEAN = 4.0;
 const RATING_PRIOR_WEIGHT = 20;
 
+export interface Coordinates {
+  lat: number;
+  lng: number;
+}
+
+/** Great-circle distance in miles between two points (haversine). */
+function milesBetween(a: Coordinates, b: Coordinates): number {
+  const R = 3958.8; // Earth radius in miles
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
 interface Scored {
   result: Omit<PhysicianResult, "matchReasons" | "networkStatus">;
   score: number;
@@ -207,10 +237,19 @@ function scorePhysician(
   rating: PlaceRating | null,
   resolved: ResolvedCondition,
   audience: PatientAudience,
+  center: Coordinates | null,
 ): Scored {
   const reasons: string[] = [];
   let score = 0;
   const isPediatric = PEDIATRIC_RE.test(npi.taxonomyDesc ?? "");
+
+  // Distance from the searched location (when both the center and the provider geocoded).
+  let distanceMiles: number | null = null;
+  if (center && rating?.lat != null && rating?.lng != null) {
+    distanceMiles = Math.round(milesBetween(center, { lat: rating.lat, lng: rating.lng }) * 10) / 10;
+    reasons.push(`${distanceMiles} mi away`);
+    score += Math.max(0, 3 - distanceMiles / 10); // mild nearer-is-better nudge, never dominates quality
+  }
 
   // Credential match: a real MD/DO in the requested taxonomy is the baseline of "expert".
   if (npi.taxonomyDesc) {
@@ -219,7 +258,8 @@ function scorePhysician(
     const cred = npi.credential ? `${npi.credential} · ` : "";
     reasons.push(`${cred}${npi.taxonomyDesc}`.trim());
   }
-  if (npi.credential && /^(md|do)$/i.test(npi.credential)) score += 1;
+  // Credential may arrive as "MD", "M.D", "M.D." etc. — strip dots/spaces before matching.
+  if (npi.credential && /^(md|do)$/i.test(npi.credential.replace(/[.\s]/g, ""))) score += 1;
 
   // Age fit: a minor's search should prefer pediatric specialists (adults are filtered upstream).
   if (audience.isMinor === true && isPediatric) {
@@ -257,6 +297,7 @@ function scorePhysician(
       website,
       rating: rating?.rating ?? null,
       reviewCount: rating?.userRatingCount ?? null,
+      distanceMiles,
       source: enabled.npiRegistry() ? "npi" : "mock",
     },
     score,
@@ -269,44 +310,61 @@ export interface PhysicianSearchInput {
   subjectUserId: string;
   condition: string;
   location?: string;
+  /** Page size (default 20). */
   limit?: number;
+  /** Pagination offset into the registry (for "load more"). */
+  offset?: number;
+  /** Only keep providers within this many miles of `location` (when both geocode). */
+  radiusMiles?: number;
 }
 
+const RECOMMEND_CAP = 8; // how many top candidates we read reviews for + hand the recommender
+
 /**
- * Search for the best specialists for a condition, ranked, with in-network status. Resolves the
- * specialty, queries the NPI registry, enriches with Google ratings, ranks, and labels each against the
- * member's insurance + any matching saved directory provider's accepted carriers.
+ * Search for the best specialists for a condition: resolves the specialty, pages the NPI registry,
+ * enriches with Google ratings + location, filters by radius + age, ranks (rating-led), labels in-network,
+ * and — on the first page — reads review snippets to write a plain-language recommendation for the need.
  */
 export async function searchPhysicians(input: PhysicianSearchInput): Promise<PhysicianSearchOutput> {
+  const limit = input.limit ?? 20;
+  const offset = Math.max(0, input.offset ?? 0);
+  const radiusMiles = input.location ? input.radiusMiles ?? 20 : null;
+
   const resolved = await resolveCondition(input.condition);
   if (!resolved.npiTaxonomy && !resolved.specialty) {
-    return { resolvedSpecialty: null, resolvedSubspecialty: null, disclaimer: DISCLAIMER, results: [] };
+    return empty(radiusMiles);
   }
 
-  const limit = input.limit ?? 5;
-  // Pull a wider pool than we return so ranking (ratings + age fit) has candidates to sort, not just
-  // the registry's default alphabetical order.
-  const pool = Math.max(limit * 4, 20);
   const audience = await patientAudience(input.subjectUserId);
+  // Geocode the search location once so we can compute per-provider distance + apply the radius.
+  const center = input.location ? await geocode(input.location) : null;
+
+  // One registry page at this offset. hasMore = the page came back full (more likely exist).
   const candidates = await npiSearch({
     taxonomy: resolved.npiTaxonomy ?? undefined,
     specialtyText: resolved.specialty ?? undefined,
     location: input.location,
-    limit: pool,
+    limit,
+    skip: offset,
   });
+  const hasMore = candidates.length === limit;
 
-  // Drop pediatric-only specialists for adult patients (NPI's taxonomy is too broad to do this server-side).
-  const filtered = audience.isMinor === false ? candidates.filter((c) => !PEDIATRIC_RE.test(c.taxonomyDesc ?? "")) : candidates;
-
-  // Enrich with Google ratings (the quality signal), capped to bound Places calls per search.
-  const ENRICH_CAP = Math.min(filtered.length, Math.max(limit * 2, 12));
-  const ratings = await Promise.all(
-    filtered.map((c, i) => (i < ENRICH_CAP ? lookupPlaceRating(c.name, c.address) : Promise.resolve(null))),
+  // NPI's taxonomy_description match is loose: "Neurology" also returns allied-health roles like
+  // "Physical Therapist, Neurology". For a doctor search, drop clearly non-physician credentials, and
+  // drop pediatric-only specialists for adult patients.
+  const filtered = candidates.filter(
+    (c) => !isAlliedHealth(c.credential) && !(audience.isMinor === false && PEDIATRIC_RE.test(c.taxonomyDesc ?? "")),
   );
-  const scored = filtered
-    .map((c, i) => scorePhysician(c, ratings[i], resolved, audience))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
+
+  // Enrich with Google ratings + location (quality + distance signal).
+  const ratings = await Promise.all(filtered.map((c) => lookupPlaceRating(c.name, c.address)));
+  let scored = filtered.map((c, i) => scorePhysician(c, ratings[i], resolved, audience, center));
+
+  // Radius filter: drop providers we KNOW are beyond the radius; keep those we couldn't geocode.
+  if (radiusMiles != null) {
+    scored = scored.filter((s) => s.result.distanceMiles == null || s.result.distanceMiles <= radiusMiles);
+  }
+  scored.sort((a, b) => b.score - a.score);
 
   // In-network: member carriers + any saved directory provider's tagged accepted carriers.
   const member = await memberCarriers(input.subjectUserId);
@@ -322,10 +380,67 @@ export async function searchPhysicians(input: PhysicianSearchInput): Promise<Phy
     return { ...result, matchReasons: reasons, networkStatus: networkStatus(accepted, member) };
   });
 
+  // Recommendation only on the first page (reads reviews → LLM), so it reflects the top set once per search.
+  const recommendation = offset === 0 ? await recommend(input.condition, results.slice(0, RECOMMEND_CAP)) : null;
+
   return {
     resolvedSpecialty: resolved.specialty,
     resolvedSubspecialty: resolved.subspecialty,
     disclaimer: DISCLAIMER,
+    recommendation,
+    radiusMiles,
+    hasMore,
+    nextOffset: hasMore ? offset + limit : null,
     results,
   };
+}
+
+function empty(radiusMiles: number | null): PhysicianSearchOutput {
+  return {
+    resolvedSpecialty: null,
+    resolvedSubspecialty: null,
+    disclaimer: DISCLAIMER,
+    recommendation: null,
+    radiusMiles,
+    hasMore: false,
+    nextOffset: null,
+    results: [],
+  };
+}
+
+/**
+ * Read each top candidate's Google reviews and write a short recommendation matching the stated need
+ * (e.g. "Botox experience for migraine" → who has review evidence of it). Returns null when no LLM is
+ * configured or there's nothing to read, so the UI simply omits the section.
+ */
+async function recommend(condition: string, top: PhysicianResult[]): Promise<string | null> {
+  if (top.length === 0) return null;
+  // Pull review snippets for the candidates with a Google listing (bounded by RECOMMEND_CAP upstream).
+  const withReviews = await Promise.all(
+    top.map(async (r) => ({ r, reviews: r.rating != null ? await lookupPlaceReviews(r.name, r.address) : [] })),
+  );
+
+  const dossier = withReviews
+    .map(({ r, reviews }, i) => {
+      const lines = [
+        `${i + 1}. ${r.name} — ${r.taxonomyDesc ?? r.specialty}`,
+        `   rating: ${r.rating != null ? `${r.rating}★ (${r.reviewCount ?? 0} reviews)` : "none"}` +
+          (r.distanceMiles != null ? `, ${r.distanceMiles} mi` : ""),
+      ];
+      if (reviews.length) lines.push(`   reviews: ${reviews.map((t) => `"${t.replace(/\s+/g, " ").slice(0, 240)}"`).join(" | ")}`);
+      return lines.join("\n");
+    })
+    .join("\n\n");
+
+  const text = await runText({
+    system:
+      "You are Klove, a careful care navigator. Given a patient's specific need and a ranked list of " +
+      "specialists with Google ratings and review snippets, recommend the 2–3 best matches FOR THAT NEED. " +
+      "Cite concrete evidence (a rating, or a review that mentions the need). Be honest when the evidence " +
+      "is thin or absent — never invent experience that isn't in the data. 4–6 sentences, no preamble, " +
+      "refer to doctors by name.",
+    content: `Patient need: "${condition}"\n\nCandidates:\n${dossier}`,
+    maxTokens: 500,
+  });
+  return text?.trim() || null;
 }

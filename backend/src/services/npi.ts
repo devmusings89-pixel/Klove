@@ -32,6 +32,8 @@ export interface NpiSearchInput {
   /** Free-text location ("Seattle, WA", "98101") — split into city/state when possible. */
   location?: string;
   limit?: number;
+  /** Pagination offset into the registry results (NPI `skip`, 0–1000). */
+  skip?: number;
 }
 
 /** Best-effort "City, ST" / "ST" / zip → { city, state } for the registry's city/state filters. */
@@ -61,7 +63,8 @@ export async function searchPhysicians(input: NpiSearchInput): Promise<NpiPhysic
   if (!enabled.npiRegistry()) return mockPhysicians(label, input.taxonomy, limit);
 
   const { city, state } = parseLocation(input.location);
-  const params = new URLSearchParams({ version: "2.1", enumeration_type: "NPI-1", limit: String(Math.min(limit, 50)) });
+  const params = new URLSearchParams({ version: "2.1", enumeration_type: "NPI-1", limit: String(Math.min(limit, 200)) });
+  if (input.skip && input.skip > 0) params.set("skip", String(Math.min(input.skip, 1000)));
   if (input.taxonomy) params.set("taxonomy_description", input.taxonomy);
   if (city) params.set("city", city);
   if (state) params.set("state", state);

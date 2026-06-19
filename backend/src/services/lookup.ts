@@ -145,12 +145,16 @@ export interface PlaceRating {
   phone: string | null;
   website: string | null;
   address: string | null;
+  lat: number | null;
+  lng: number | null;
 }
 
 /**
- * Look up an office's Google rating + review count (plus contact) by name/address — the quality proxy
- * for physician search ranking. Returns null when Places is off (no fabricated ratings) so ranking
- * falls back to credentials alone. The mock physician seed carries no rating, keeping tests deterministic.
+ * Look up an office's Google rating + review count + location (plus contact) by name/address — the
+ * quality + distance signal for physician search. Returns null when Places is off (no fabricated data)
+ * so ranking falls back to credentials alone. The mock physician seed carries no rating, keeping tests
+ * deterministic. Review TEXT is fetched separately (lookupPlaceReviews) only for the few candidates we
+ * hand to the recommender, to bound the higher-cost reviews field.
  */
 export async function lookupPlaceRating(officeName: string, address?: string | null): Promise<PlaceRating | null> {
   if (!enabled.googlePlaces()) return null;
@@ -163,7 +167,7 @@ export async function lookupPlaceRating(officeName: string, address?: string | n
         "Content-Type": "application/json",
         "X-Goog-Api-Key": config.googlePlacesApiKey,
         "X-Goog-FieldMask":
-          "places.rating,places.userRatingCount,places.internationalPhoneNumber,places.websiteUri,places.formattedAddress",
+          "places.rating,places.userRatingCount,places.internationalPhoneNumber,places.websiteUri,places.formattedAddress,places.location",
       },
       body: JSON.stringify({ textQuery: query, maxResultCount: 1 }),
     });
@@ -175,6 +179,7 @@ export async function lookupPlaceRating(officeName: string, address?: string | n
         internationalPhoneNumber?: string;
         websiteUri?: string;
         formattedAddress?: string;
+        location?: { latitude?: number; longitude?: number };
       }[];
     };
     const p = json.places?.[0];
@@ -185,10 +190,68 @@ export async function lookupPlaceRating(officeName: string, address?: string | n
       phone: p.internationalPhoneNumber ? p.internationalPhoneNumber.replace(/[^\d+]/g, "") : null,
       website: p.websiteUri ?? null,
       address: p.formattedAddress ?? null,
+      lat: typeof p.location?.latitude === "number" ? p.location.latitude : null,
+      lng: typeof p.location?.longitude === "number" ? p.location.longitude : null,
     };
   } catch (err) {
     console.error("lookupPlaceRating failed", err);
     return null;
+  }
+}
+
+/** Geocode a free-text location ("Seattle, WA", "98101") to a center point, or null. */
+export async function geocode(location: string): Promise<{ lat: number; lng: number } | null> {
+  if (!enabled.googlePlaces()) return null;
+  const q = location.trim();
+  if (!q) return null;
+  try {
+    const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": config.googlePlacesApiKey,
+        "X-Goog-FieldMask": "places.location",
+      },
+      body: JSON.stringify({ textQuery: q, maxResultCount: 1 }),
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as { places?: { location?: { latitude?: number; longitude?: number } }[] };
+    const loc = json.places?.[0]?.location;
+    if (typeof loc?.latitude !== "number" || typeof loc?.longitude !== "number") return null;
+    return { lat: loc.latitude, lng: loc.longitude };
+  } catch (err) {
+    console.error("geocode failed", err);
+    return null;
+  }
+}
+
+/** Up to `limit` review snippets (text) for an office — fed to the recommender to match a stated need. */
+export async function lookupPlaceReviews(officeName: string, address?: string | null, limit = 4): Promise<string[]> {
+  if (!enabled.googlePlaces()) return [];
+  const query = [officeName, address].filter(Boolean).join(" ").trim();
+  if (!query) return [];
+  try {
+    const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": config.googlePlacesApiKey,
+        "X-Goog-FieldMask": "places.reviews",
+      },
+      body: JSON.stringify({ textQuery: query, maxResultCount: 1 }),
+    });
+    if (!res.ok) return [];
+    const json = (await res.json()) as {
+      places?: { reviews?: { text?: { text?: string }; originalText?: { text?: string }; rating?: number }[] }[];
+    };
+    const reviews = json.places?.[0]?.reviews ?? [];
+    return reviews
+      .map((r) => (r.text?.text ?? r.originalText?.text ?? "").trim())
+      .filter(Boolean)
+      .slice(0, limit);
+  } catch (err) {
+    console.error("lookupPlaceReviews failed", err);
+    return [];
   }
 }
 
