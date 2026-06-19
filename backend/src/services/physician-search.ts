@@ -154,6 +154,41 @@ export function networkStatus(accepted: string[], member: string[]): NetworkStat
   return accepted.some((a) => member.includes(a)) ? "in_network" : "out_of_network";
 }
 
+// ---- Patient audience (adult vs child) ----
+// The NPI taxonomy is broad ("Neurology"), so an adult migraine search otherwise surfaces pediatric
+// neurologists. We use the member's DOB to drop pediatric-only specialists for adults and prefer them
+// for minors. Pediatric taxonomies say "Pediatric ..." or "... Child Neurology".
+const PEDIATRIC_RE = /\bchild\b|pediatr/i;
+
+export interface PatientAudience {
+  /** true = minor, false = adult, null = unknown (no DOB on file). */
+  isMinor: boolean | null;
+}
+
+/** Age in whole years from an ISO yyyy-mm-dd string, or null if unparseable. */
+function ageFromDob(dob: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dob.trim());
+  if (!m) return null;
+  const birth = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  if (Number.isNaN(birth.getTime())) return null;
+  const now = new Date();
+  let age = now.getFullYear() - birth.getFullYear();
+  const before = now.getMonth() < birth.getMonth() || (now.getMonth() === birth.getMonth() && now.getDate() < birth.getDate());
+  if (before) age -= 1;
+  return age >= 0 && age < 130 ? age : null;
+}
+
+/** Is the patient a minor? Reads the member's profile DOB; null when none on file. */
+export async function patientAudience(subjectUserId: string): Promise<PatientAudience> {
+  const profile = await prisma.profile.findFirst({
+    where: { userId: subjectUserId, dob: { not: null } },
+    select: { dob: true },
+  });
+  if (!profile?.dob) return { isMinor: null };
+  const age = ageFromDob(profile.dob);
+  return { isMinor: age == null ? null : age < 18 };
+}
+
 // ---- Ranking ----
 
 interface Scored {
@@ -166,9 +201,11 @@ function scorePhysician(
   npi: NpiPhysician,
   rating: PlaceRating | null,
   resolved: ResolvedCondition,
+  audience: PatientAudience,
 ): Scored {
   const reasons: string[] = [];
   let score = 0;
+  const isPediatric = PEDIATRIC_RE.test(npi.taxonomyDesc ?? "");
 
   // Credential match: a real MD/DO in the requested taxonomy is the baseline of "expert".
   if (npi.taxonomyDesc) {
@@ -178,6 +215,12 @@ function scorePhysician(
     reasons.push(`${cred}${npi.taxonomyDesc}`.trim());
   }
   if (npi.credential && /^(md|do)$/i.test(npi.credential)) score += 1;
+
+  // Age fit: a minor's search should prefer pediatric specialists (adults are filtered upstream).
+  if (audience.isMinor === true && isPediatric) {
+    score += 3;
+    reasons.push("Pediatric specialist");
+  }
 
   // Ratings as a quality proxy: weight the average by how many reviews back it (log-damped).
   if (rating?.rating != null) {
@@ -231,18 +274,29 @@ export async function searchPhysicians(input: PhysicianSearchInput): Promise<Phy
   }
 
   const limit = input.limit ?? 5;
+  // Pull a wider pool than we return so ranking (ratings + age fit) has candidates to sort, not just
+  // the registry's default alphabetical order.
+  const pool = Math.max(limit * 4, 20);
+  const audience = await patientAudience(input.subjectUserId);
   const candidates = await npiSearch({
     taxonomy: resolved.npiTaxonomy ?? undefined,
     specialtyText: resolved.specialty ?? undefined,
     location: input.location,
-    limit,
+    limit: pool,
   });
 
-  // Enrich with Google ratings in parallel (null in mock / when Places is off).
-  const ratings = await Promise.all(candidates.map((c) => lookupPlaceRating(c.name, c.address)));
-  const scored = candidates
-    .map((c, i) => scorePhysician(c, ratings[i], resolved))
-    .sort((a, b) => b.score - a.score);
+  // Drop pediatric-only specialists for adult patients (NPI's taxonomy is too broad to do this server-side).
+  const filtered = audience.isMinor === false ? candidates.filter((c) => !PEDIATRIC_RE.test(c.taxonomyDesc ?? "")) : candidates;
+
+  // Enrich with Google ratings (the quality signal), capped to bound Places calls per search.
+  const ENRICH_CAP = Math.min(filtered.length, Math.max(limit * 2, 12));
+  const ratings = await Promise.all(
+    filtered.map((c, i) => (i < ENRICH_CAP ? lookupPlaceRating(c.name, c.address) : Promise.resolve(null))),
+  );
+  const scored = filtered
+    .map((c, i) => scorePhysician(c, ratings[i], resolved, audience))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
 
   // In-network: member carriers + any saved directory provider's tagged accepted carriers.
   const member = await memberCarriers(input.subjectUserId);

@@ -16,9 +16,8 @@ process.env.WEB_AGENT_PROVIDER = "anthropic"; // anthropic + no key → no LLM, 
 const { prisma } = await import("../src/db.js");
 const { ensureHousehold } = await import("../src/services/household.js");
 const { upsertProvider } = await import("../src/services/providers.js");
-const { searchPhysicians, resolveCondition, normalizeCarrier, networkStatus, memberCarriers } = await import(
-  "../src/services/physician-search.js"
-);
+const { searchPhysicians, resolveCondition, normalizeCarrier, networkStatus, memberCarriers, patientAudience } =
+  await import("../src/services/physician-search.js");
 
 const SUFFIX = `physsearch-${process.pid}-${process.hrtime.bigint()}`;
 const userIds: string[] = [];
@@ -92,6 +91,21 @@ test("fresh search hits are 'unconfirmed' when the member has insurance but the 
   assert.deepEqual(await memberCarriers(op.id), ["aetna"]);
   const out = await searchPhysicians({ householdId: op.householdId, subjectUserId: op.id, condition: "dermatologist" });
   assert.ok(out.results.every((r) => r.networkStatus === "unconfirmed"));
+});
+
+test("patientAudience reads the member's DOB: adult, minor, or unknown when none on file", async () => {
+  const adult = await mkOperator("adult");
+  const ap = await prisma.profile.create({ data: { userId: adult.id, fullName: "Grown Up", dob: "1980-05-01" } });
+  profileIds.push(ap.id);
+  assert.equal((await patientAudience(adult.id)).isMinor, false);
+
+  const minor = await mkOperator("minor");
+  const mp = await prisma.profile.create({ data: { userId: minor.id, fullName: "Little One", dob: "2018-05-01" } });
+  profileIds.push(mp.id);
+  assert.equal((await patientAudience(minor.id)).isMinor, true);
+
+  const nodob = await mkOperator("nodob");
+  assert.equal((await patientAudience(nodob.id)).isMinor, null);
 });
 
 test("a saved provider tagged with the member's carrier reads as in_network; a non-overlapping one is out_of_network", async () => {

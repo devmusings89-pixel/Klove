@@ -94,7 +94,8 @@ interface NpiApiResult {
 function fromApi(r: NpiApiResult): NpiPhysician | null {
   const first = r.basic?.first_name?.trim();
   const last = r.basic?.last_name?.trim();
-  if (!first || !last) return null;
+  // Skip records missing a real name (the registry uses "UNKNOWN" as a placeholder for some rows).
+  if (!first || !last || /^unknown$/i.test(first) || /^unknown$/i.test(last)) return null;
   const credential = r.basic?.credential?.replace(/\.$/, "").trim() || null;
   const primaryTax = r.taxonomies?.find((t) => t.primary) ?? r.taxonomies?.[0];
   const loc = r.addresses?.find((a) => a.address_purpose === "LOCATION") ?? r.addresses?.[0];
