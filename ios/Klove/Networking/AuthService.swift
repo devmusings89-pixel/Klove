@@ -18,6 +18,13 @@ final class AuthService: NSObject {
 
     override init() {
         super.init()
+        #if DEBUG
+        // Test hook: inject a Bearer token at launch so a simulator run can verify the authenticated
+        // path end to end (KLOVE_TEST_BEARER=<jwt>). DEBUG-only; never compiled into release builds.
+        if let t = ProcessInfo.processInfo.environment["KLOVE_TEST_BEARER"], !t.isEmpty {
+            KeychainStore.set(t, for: AppStorageKey.authToken)
+        }
+        #endif
         isAuthenticated = isSignedIn
     }
     /// One-time CSRF nonce for the Google OAuth web flow; verified against the callback's `state`.

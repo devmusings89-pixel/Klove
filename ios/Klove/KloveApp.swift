@@ -5,14 +5,21 @@ struct KloveApp: App {
     @AppStorage(AppStorageKey.hasOnboarded) private var hasOnboarded = false
     @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
     @State private var invites = InviteCoordinator.shared
+    @State private var auth = AuthService.shared
 
     var body: some Scene {
         WindowGroup {
             Group {
-                if hasOnboarded {
+                if !hasOnboarded {
+                    OnboardingView()
+                        .transition(.opacity)
+                } else if auth.isAuthenticated {
                     MainTabView()
                 } else {
-                    OnboardingView()
+                    // Onboarded but no valid session (no/expired Supabase token). The production
+                    // backend requires a real JWT, so re-authenticate before loading data — otherwise
+                    // every request 401s and the app misreports it as "Couldn't reach Klove".
+                    ReAuthView()
                         .transition(.opacity)
                 }
             }

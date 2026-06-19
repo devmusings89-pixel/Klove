@@ -191,21 +191,29 @@ struct APIClient {
 
     func send<R: Decodable>(_ req: URLRequest) async throws -> R {
         var req = req
+        let authMode: String
         if !authToken.isEmpty {
             req.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+            authMode = "bearer"
         } else if !userEmail.isEmpty {
             req.setValue(userEmail, forHTTPHeaderField: "x-user-email")
+            authMode = "x-user-email"
+        } else {
+            authMode = "none"
         }
+        NSLog("[Klove API] → %@ %@ (auth=%@)", req.httpMethod ?? "?", req.url?.absoluteString ?? "?", authMode)
         let data: Data
         let response: URLResponse
         do {
             (data, response) = try await session.data(for: req)
         } catch {
+            NSLog("[Klove API] ✗ network error for %@: %@", req.url?.absoluteString ?? "?", String(describing: error))
             throw AppError.networkError(underlying: error)
         }
         guard let http = response as? HTTPURLResponse else {
             throw AppError.server(status: -1, message: "No HTTP response")
         }
+        NSLog("[Klove API] ← %d %@", http.statusCode, req.url?.path ?? "?")
         guard (200..<300).contains(http.statusCode) else {
             // A 401 means our Supabase session is gone/expired — clear it so the app routes back to
             // sign-in instead of every screen showing a misleading "Couldn't reach Klove".
