@@ -5,7 +5,7 @@
 import { lookupPlaceReviews, lookupPlaceRating } from "./lookup.js";
 import { memberCarriers, memberCarrierNames } from "./physician-search.js";
 import { normalizeCarrier, networkStatus, type NetworkStatus } from "./network.js";
-import { scrapeInsurance } from "./insurance.js";
+import { scrapeInsurance, confirmNetworkByText } from "./insurance.js";
 
 export interface PhysicianDetail {
   reviews: string[];
@@ -22,6 +22,23 @@ export interface PhysicianDetailInput {
   name: string;
   address?: string;
   website?: string;
+}
+
+/**
+ * FAST per-card network status — for the search list to verify each card lazily as it appears, without a
+ * full LLM scrape. Resolves a website when needed, then text-matches the member's carrier. Returns
+ * "unknown" (no insurance on file), "in_network" (carrier found), or "unconfirmed".
+ */
+export async function physicianNetwork(input: PhysicianDetailInput): Promise<{ networkStatus: NetworkStatus }> {
+  const member = await memberCarriers(input.subjectUserId);
+  if (member.length === 0) return { networkStatus: "unknown" };
+  let website = input.website?.trim() || null;
+  if (!website) {
+    const place = await lookupPlaceRating(input.name, input.address ?? null);
+    website = place?.website ?? null;
+  }
+  if (!website) return { networkStatus: "unconfirmed" };
+  return { networkStatus: await confirmNetworkByText(website, member) };
 }
 
 /** Reviews + scraped-insurance network status for one provider's detail view (full scrape). */

@@ -19,8 +19,12 @@ final class PhysicianSearchModel {
     var resolvedSpecialty: String?
     var resolvedSubspecialty: String?
     var recommendation: PhysicianRecommendation?
+    var recommending = false
     var memberInsurance: [String] = []
     var disclaimer = ""
+    /// Per-card insurance status, verified lazily as each card appears (keyed by result id).
+    var networkStatusById: [String: NetworkStatus] = [:]
+    var verifyingIds: Set<String> = []
     var searching = false
     var loadingMore = false
     var hasSearched = false
@@ -52,16 +56,32 @@ final class PhysicianSearchModel {
                 radiusMiles: radiusApplies ? radiusMiles : nil, offset: 0
             )
             results = res.results
+            networkStatusById = [:]
+            verifyingIds = []
             resolvedSpecialty = res.resolvedSpecialty
             resolvedSubspecialty = res.resolvedSubspecialty
-            recommendation = res.recommendation
+            recommendation = nil
             memberInsurance = res.memberInsurance
             disclaimer = res.disclaimer
             nextOffset = res.nextOffset
             hasSearched = true
+            Task { await loadRecommendation(for: q) }   // load the recommendation async (reads reviews + LLM)
         } catch {
             errorMessage = (error as? AppError)?.errorDescription ?? error.localizedDescription
         }
+    }
+
+    /// Fetch Klove's recommendation in the background from the top results, so the list isn't blocked on it.
+    private func loadRecommendation(for condition: String) async {
+        guard !results.isEmpty else { return }
+        recommending = true
+        defer { recommending = false }
+        let candidates = results.prefix(8).map {
+            RecommendCandidateBody(name: $0.name, address: $0.address, taxonomyDesc: $0.taxonomyDesc,
+                                   specialty: $0.specialty, rating: $0.rating, reviewCount: $0.reviewCount,
+                                   distanceMiles: $0.distanceMiles)
+        }
+        recommendation = (try? await api.recommendPhysicians(condition: condition, candidates: Array(candidates))) ?? nil
     }
 
     /// "Load more": fetch the next page and append, keeping the existing recommendation.
@@ -82,6 +102,22 @@ final class PhysicianSearchModel {
             nextOffset = res.nextOffset
         } catch {
             errorMessage = (error as? AppError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// The best-known network status for a result: a lazily-verified value wins over the search default.
+    func status(for r: PhysicianResult) -> NetworkStatus { networkStatusById[r.id] ?? r.networkStatus }
+    func isVerifying(_ r: PhysicianResult) -> Bool { verifyingIds.contains(r.id) && networkStatusById[r.id] == nil }
+
+    /// Verify one card's insurance lazily (called as the card appears). No-op when already known/in-flight.
+    func verifyNetwork(_ r: PhysicianResult) async {
+        guard !memberInsurance.isEmpty else { return }                 // nothing to check against
+        guard r.networkStatus == .unconfirmed else { return }          // already decided (e.g. saved + tagged)
+        guard networkStatusById[r.id] == nil, !verifyingIds.contains(r.id) else { return }
+        verifyingIds.insert(r.id)
+        defer { verifyingIds.remove(r.id) }
+        if let resp = try? await api.physicianNetwork(name: r.name, address: r.address, website: r.website, memberId: memberId) {
+            networkStatusById[r.id] = resp.networkStatus
         }
     }
 

@@ -14,7 +14,6 @@ import { searchPhysicians as npiSearch, type NpiPhysician } from "./npi.js";
 import { lookupPlaceRating, lookupPlaceReviews, geocode, searchSpecialists, type PlaceRating } from "./lookup.js";
 import { enabled } from "../config.js";
 import { normalizeCarrier, networkStatus, type NetworkStatus } from "./network.js";
-import { confirmNetworkByText } from "./insurance.js";
 
 // Re-export so existing importers (routes, physician-detail) keep working after the network.ts extraction.
 export { normalizeCarrier, networkStatus, type NetworkStatus };
@@ -359,8 +358,7 @@ export interface PhysicianSearchInput {
   radiusMiles?: number;
 }
 
-const RECOMMEND_CAP = 8; // how many top candidates we read reviews for + hand the recommender
-const INSURANCE_CHECK_CAP = 8; // how many website-bearing results we fast-check for in-network status per search
+export const RECOMMEND_CAP = 8; // how many top candidates we read reviews for + hand the recommender
 
 /**
  * Search for the best specialists for a condition: resolves the specialty, pages the NPI registry,
@@ -444,35 +442,17 @@ export async function searchPhysicians(input: PhysicianSearchInput): Promise<Phy
     return { ...result, matchReasons: reasons, networkStatus: networkStatus(accepted, member) };
   });
 
-  // Confirm insurance in the LIST (not just the detail view): for results that still read "unconfirmed"
-  // and have a website, do a FAST, LLM-free text match for the member's carrier. Runs concurrently with
-  // the recommendation so it doesn't add to wall-clock; matches upgrade to "Accepts <carrier>", the rest
-  // stay "unconfirmed" → the UI shows "Check coverage".
-  const insurancePass =
-    member.length > 0
-      ? Promise.all(
-          results
-            .filter((r) => r.networkStatus === "unconfirmed" && r.website)
-            .slice(0, INSURANCE_CHECK_CAP)
-            .map(async (r) => {
-              const status = await confirmNetworkByText(r.website!, member);
-              if (status === "in_network") r.networkStatus = status;
-            }),
-        )
-      : Promise.resolve([]);
-
-  const [recommendation, memberInsurance] = await Promise.all([
-    // Recommendation only on the first page (reads reviews → LLM), so it reflects the top set once per search.
-    offset === 0 ? recommend(input.condition, results.slice(0, RECOMMEND_CAP)) : Promise.resolve(null),
-    memberCarrierNames(input.subjectUserId),
-    insurancePass,
-  ]);
+  // Neither insurance nor the recommendation is computed here — the search returns immediately. The
+  // client loads both progressively after the list renders: each card verifies its insurance as it
+  // appears (GET /physicians/network), and the recommendation loads once (POST /physicians/recommendation).
+  // Results already tagged in the directory keep their status from above.
+  const memberInsurance = await memberCarrierNames(input.subjectUserId);
 
   return {
     resolvedSpecialty: resolved.specialty,
     resolvedSubspecialty: resolved.subspecialty,
     disclaimer: DISCLAIMER,
-    recommendation,
+    recommendation: null,
     radiusMiles,
     hasMore,
     nextOffset: hasMore ? offset + limit : null,
@@ -531,12 +511,24 @@ interface RawPick {
   caution?: string;
 }
 
+/** The minimal candidate shape the recommender needs (so it can run from a client-supplied list). */
+export interface RecommendCandidate {
+  name: string;
+  address?: string | null;
+  taxonomyDesc?: string | null;
+  specialty?: string | null;
+  rating?: number | null;
+  reviewCount?: number | null;
+  distanceMiles?: number | null;
+}
+
 /**
  * Read each top candidate's Google reviews and produce a STRUCTURED recommendation matching the stated
  * need (e.g. "Botox experience for migraine" → who has review evidence of it). Returns null when no LLM
- * is configured or there's nothing to read, so the UI omits the section.
+ * is configured or there's nothing to read, so the UI omits the section. Exported so it can run async as
+ * its own endpoint after the (fast) search returns.
  */
-async function recommend(condition: string, top: PhysicianResult[]): Promise<Recommendation | null> {
+export async function recommend(condition: string, top: RecommendCandidate[]): Promise<Recommendation | null> {
   if (top.length === 0) return null;
   // Pull review snippets for the candidates with a Google listing (bounded by RECOMMEND_CAP upstream).
   const withReviews = await Promise.all(

@@ -103,6 +103,8 @@ struct PhysicianSearchView: View {
     private var resultsSection: some View {
         if let rec = model.recommendation {
             recommendationCard(rec)
+        } else if model.recommending {
+            recommendationLoadingCard
         }
         if let spec = model.resolvedSpecialty {
             Text(("Best matches · " + spec + (model.resolvedSubspecialty.map { " · \($0)" } ?? "")).uppercased())
@@ -113,7 +115,9 @@ struct PhysicianSearchView: View {
                 .font(.kloveBody).foregroundStyle(Theme.inkSecondary).kloveCard()
         } else {
             ForEach(model.results) { p in
-                NavigationLink(value: p) { resultCard(p) }.buttonStyle(.plain)
+                NavigationLink(value: p) { resultCard(p) }
+                    .buttonStyle(.plain)
+                    .task { await model.verifyNetwork(p) }   // verify this card's insurance as it appears
             }
             if model.hasMore {
                 Button { Task { await model.loadMore() } } label: {
@@ -127,6 +131,19 @@ struct PhysicianSearchView: View {
                 Text(model.disclaimer).font(.caption).foregroundStyle(Theme.inkSecondary).padding(.top, 4)
             }
         }
+    }
+
+    private var recommendationLoadingCard: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            Label("Klove's recommendation", systemImage: "sparkles")
+                .font(.kloveLabel).tracking(Theme.Tracking.label).foregroundStyle(Theme.accent)
+            HStack(spacing: Theme.Spacing.sm) {
+                ProgressView()
+                Text("Reviewing the top matches for you…").font(.kloveBody).foregroundStyle(Theme.inkSecondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .kloveCardSunken()
     }
 
     @ViewBuilder
@@ -190,7 +207,7 @@ struct PhysicianSearchView: View {
                     }
                 }
                 Spacer()
-                NetworkBadge(status: p.networkStatus, carrier: model.memberInsurance.first)
+                NetworkBadge(status: model.status(for: p), carrier: model.memberInsurance.first, checking: model.isVerifying(p))
             }
 
             HStack(spacing: Theme.Spacing.md) {
@@ -229,7 +246,7 @@ struct PhysicianDetailView: View {
     @State private var showBook = false
     private let api = APIClient()
 
-    private var networkStatus: NetworkStatus { detail?.networkStatus ?? result.networkStatus }
+    private var networkStatus: NetworkStatus { detail?.networkStatus ?? model.networkStatusById[result.id] ?? result.networkStatus }
 
     var body: some View {
         ScrollView {
@@ -451,18 +468,24 @@ struct NetworkBadge: View {
     let status: NetworkStatus
     /// The member's insurance carrier name, so a confirmed badge can read "Accepts Aetna".
     var carrier: String? = nil
+    /// True while this card's insurance is still being verified.
+    var checking: Bool = false
 
     var body: some View {
-        Text(label.uppercased())
-            .font(.system(size: 10, weight: .bold))
-            .tracking(0.8)
-            .multilineTextAlignment(.trailing)
-            .padding(.horizontal, 8).padding(.vertical, 4)
-            .background(tint.opacity(0.14), in: Capsule())
-            .foregroundStyle(tint)
+        HStack(spacing: 4) {
+            if checking { ProgressView().scaleEffect(0.6).frame(width: 10, height: 10) }
+            Text(label.uppercased())
+                .font(.system(size: 10, weight: .bold))
+                .tracking(0.8)
+                .multilineTextAlignment(.trailing)
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(tint.opacity(0.14), in: Capsule())
+        .foregroundStyle(tint)
     }
 
     private var label: String {
+        if checking { return "Checking…" }
         switch status {
         case .inNetwork: return carrier.map { "Accepts \($0)" } ?? "In-network"
         case .outOfNetwork: return carrier.map { "\($0) out-of-network" } ?? "Out-of-network"
@@ -472,6 +495,7 @@ struct NetworkBadge: View {
     }
 
     private var tint: Color {
+        if checking { return Theme.inkSecondary }
         switch status {
         case .inNetwork: return .green
         case .outOfNetwork: return .red

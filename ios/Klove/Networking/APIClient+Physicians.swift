@@ -18,6 +18,23 @@ extension APIClient {
         return try await get("/physicians/search?\(query)")
     }
 
+    /// Load Klove's recommendation asynchronously after the search list renders (reads reviews + LLM).
+    func recommendPhysicians(condition: String, candidates: [RecommendCandidateBody]) async throws -> PhysicianRecommendation? {
+        let resp: RecommendationResponse = try await post("/physicians/recommendation", body: RecommendRequest(condition: condition, candidates: candidates))
+        return resp.recommendation
+    }
+
+    /// Fast per-card network status — called lazily as each result appears so badges populate progressively.
+    func physicianNetwork(name: String, address: String?, website: String?, memberId: String? = nil) async throws -> NetworkStatusResponse {
+        var items = [URLQueryItem(name: "name", value: name)]
+        if let address, !address.isEmpty { items.append(URLQueryItem(name: "address", value: address)) }
+        if let website, !website.isEmpty { items.append(URLQueryItem(name: "website", value: website)) }
+        if let memberId { items.append(URLQueryItem(name: "memberId", value: memberId)) }
+        var comps = URLComponents()
+        comps.queryItems = items
+        return try await get("/physicians/network?\(comps.percentEncodedQuery ?? "")")
+    }
+
     /// Detail view data for one provider: review snippets + accepted insurance scraped from their website,
     /// matched against the member's coverage for a confirmed network status.
     func physicianDetails(name: String, address: String?, website: String?, memberId: String? = nil) async throws -> PhysicianDetail {
@@ -85,6 +102,31 @@ struct PhysicianResult: Decodable, Identifiable, Hashable {
 
     // Stable identity for ForEach: NPI when present, else name+address.
     var id: String { npi ?? "\(name)|\(address ?? "")" }
+}
+
+/// Response from GET /physicians/network.
+struct NetworkStatusResponse: Decodable {
+    let networkStatus: NetworkStatus
+}
+
+/// Minimal candidate sent to POST /physicians/recommendation.
+struct RecommendCandidateBody: Encodable {
+    let name: String
+    let address: String?
+    let taxonomyDesc: String?
+    let specialty: String?
+    let rating: Double?
+    let reviewCount: Int?
+    let distanceMiles: Double?
+}
+
+private struct RecommendRequest: Encodable {
+    let condition: String
+    let candidates: [RecommendCandidateBody]
+}
+
+private struct RecommendationResponse: Decodable {
+    let recommendation: PhysicianRecommendation?
 }
 
 /// One ranked pick in Klove's recommendation.
