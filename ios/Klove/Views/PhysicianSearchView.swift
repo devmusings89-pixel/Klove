@@ -63,9 +63,21 @@ struct PhysicianSearchView: View {
                 .lineLimit(1...3)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { Task { await model.search() } }
-            TextField("Location (optional) — e.g. Seattle, WA", text: $model.location)
-                .textFieldStyle(.roundedBorder)
-                .textInputAutocapitalization(.words)
+            HStack(spacing: Theme.Spacing.md) {
+                TextField("Location — e.g. Seattle, WA", text: $model.location)
+                    .textFieldStyle(.roundedBorder)
+                    .textInputAutocapitalization(.words)
+                Picker("Within", selection: $model.radiusMiles) {
+                    ForEach(model.radiusOptions, id: \.self) { mi in Text("\(mi) mi").tag(mi) }
+                }
+                .pickerStyle(.menu)
+                .tint(Theme.accent)
+                .disabled(!model.radiusApplies)
+            }
+            if !model.radiusApplies {
+                Text("Add a location to filter by distance.")
+                    .font(.caption2).foregroundStyle(Theme.inkSecondary)
+            }
             Button { Task { await model.search() } } label: {
                 Label("Find experts", systemImage: "magnifyingglass")
             }
@@ -88,19 +100,41 @@ struct PhysicianSearchView: View {
 
     @ViewBuilder
     private var resultsSection: some View {
+        if let rec = model.recommendation, !rec.isEmpty {
+            recommendationCard(rec)
+        }
         if let spec = model.resolvedSpecialty {
             Text(("Best matches · " + spec + (model.resolvedSubspecialty.map { " · \($0)" } ?? "")).uppercased())
                 .font(.kloveLabel).tracking(Theme.Tracking.label).foregroundStyle(Theme.inkSecondary)
         }
         if model.results.isEmpty {
-            Text("No specialists found. Try describing the condition differently or adding a location.")
+            Text("No specialists found. Try describing the condition differently, widening the radius, or changing the location.")
                 .font(.kloveBody).foregroundStyle(Theme.inkSecondary).kloveCard()
         } else {
             ForEach(model.results) { p in resultCard(p) }
+            if model.hasMore {
+                Button { Task { await model.loadMore() } } label: {
+                    if model.loadingMore { ProgressView() } else { Label("Load more", systemImage: "arrow.down.circle") }
+                }
+                .buttonStyle(KlovePrimaryButtonStyle())
+                .disabled(model.loadingMore)
+                .padding(.top, 4)
+            }
             if !model.disclaimer.isEmpty {
                 Text(model.disclaimer).font(.caption).foregroundStyle(Theme.inkSecondary).padding(.top, 4)
             }
         }
+    }
+
+    @ViewBuilder
+    private func recommendationCard(_ rec: String) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            Label("Klove's recommendation", systemImage: "sparkles")
+                .font(.kloveLabel).tracking(Theme.Tracking.label).foregroundStyle(Theme.accent)
+            Text(rec).font(.kloveBody).foregroundStyle(Theme.ink)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .kloveCardSunken()
     }
 
     @ViewBuilder
@@ -117,17 +151,19 @@ struct PhysicianSearchView: View {
                 NetworkBadge(status: p.networkStatus)
             }
 
-            if let rating = p.rating {
-                let count = p.reviewCount ?? 0
-                Label(count > 0 ? String(format: "%.1f★ · %d reviews", rating, count) : String(format: "%.1f★", rating),
-                      systemImage: "star.fill")
-                    .font(.caption).foregroundStyle(Theme.inkSecondary).labelStyle(.titleOnly)
+            HStack(spacing: Theme.Spacing.md) {
+                if let rating = p.rating {
+                    let count = p.reviewCount ?? 0
+                    Text(count > 0 ? String(format: "%.1f★ · %d reviews", rating, count) : String(format: "%.1f★", rating))
+                        .font(.caption.weight(.medium)).foregroundStyle(Theme.ink)
+                }
+                if let mi = p.distanceMiles {
+                    Label(String(format: "%.1f mi", mi), systemImage: "mappin.and.ellipse")
+                        .font(.caption).foregroundStyle(Theme.inkSecondary)
+                }
             }
             if let addr = p.address, !addr.isEmpty {
-                Label(addr, systemImage: "mappin.and.ellipse").font(.caption2).foregroundStyle(Theme.inkSecondary)
-            }
-            ForEach(p.matchReasons.prefix(3), id: \.self) { reason in
-                Label(reason, systemImage: "checkmark.seal").font(.caption2).foregroundStyle(Theme.inkSecondary)
+                Text(addr).font(.caption2).foregroundStyle(Theme.inkSecondary)
             }
 
             HStack(spacing: Theme.Spacing.md) {

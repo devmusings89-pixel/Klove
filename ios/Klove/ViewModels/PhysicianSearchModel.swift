@@ -11,12 +11,19 @@ final class PhysicianSearchModel {
     var memberId: String
     var memberName: String
 
+    /// Distance radius options (miles); 20 is the default.
+    let radiusOptions = [5, 10, 20, 50]
+    var radiusMiles = 20
+
     var results: [PhysicianResult] = []
     var resolvedSpecialty: String?
     var resolvedSubspecialty: String?
+    var recommendation: String?
     var disclaimer = ""
     var searching = false
+    var loadingMore = false
     var hasSearched = false
+    var nextOffset: Int?
     var errorMessage: String?
     var savedIds: Set<String> = []
 
@@ -28,19 +35,49 @@ final class PhysicianSearchModel {
     }
 
     var canSearch: Bool { !condition.trimmingCharacters(in: .whitespaces).isEmpty && !searching }
+    var hasMore: Bool { nextOffset != nil }
+    /// The radius only applies when a location is given.
+    var radiusApplies: Bool { !location.trimmingCharacters(in: .whitespaces).isEmpty }
 
+    /// Fresh search (page 1): replaces results and fetches the recommendation.
     func search() async {
         let q = condition.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { return }
         searching = true
         defer { searching = false }
         do {
-            let res = try await api.searchPhysicians(condition: q, memberId: memberId, location: location)
+            let res = try await api.searchPhysicians(
+                condition: q, memberId: memberId, location: location,
+                radiusMiles: radiusApplies ? radiusMiles : nil, offset: 0
+            )
             results = res.results
             resolvedSpecialty = res.resolvedSpecialty
             resolvedSubspecialty = res.resolvedSubspecialty
+            recommendation = res.recommendation
             disclaimer = res.disclaimer
+            nextOffset = res.nextOffset
             hasSearched = true
+        } catch {
+            errorMessage = (error as? AppError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// "Load more": fetch the next page and append, keeping the existing recommendation.
+    func loadMore() async {
+        guard let offset = nextOffset, !loadingMore else { return }
+        let q = condition.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return }
+        loadingMore = true
+        defer { loadingMore = false }
+        do {
+            let res = try await api.searchPhysicians(
+                condition: q, memberId: memberId, location: location,
+                radiusMiles: radiusApplies ? radiusMiles : nil, offset: offset
+            )
+            // De-dupe by id in case pages overlap.
+            let existing = Set(results.map(\.id))
+            results.append(contentsOf: res.results.filter { !existing.contains($0.id) })
+            nextOffset = res.nextOffset
         } catch {
             errorMessage = (error as? AppError)?.errorDescription ?? error.localizedDescription
         }
