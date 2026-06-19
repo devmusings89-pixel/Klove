@@ -199,6 +199,68 @@ export async function lookupPlaceRating(officeName: string, address?: string | n
   }
 }
 
+export interface SpecialistPlace {
+  name: string;
+  rating: number | null;
+  userRatingCount: number | null;
+  phone: string | null;
+  website: string | null;
+  address: string | null;
+  lat: number | null;
+  lng: number | null;
+}
+
+/**
+ * Relevance-ranked specialist/clinic search via Google Places text search — the discovery source that
+ * surfaces the actual experts for a condition (e.g. "headache medicine neurologist near Seattle"), which
+ * the NPI registry's alphabetical, specialty-only listing cannot. Returns [] when Places is off.
+ */
+export async function searchSpecialists(query: string, limit = 8): Promise<SpecialistPlace[]> {
+  if (!enabled.googlePlaces()) return [];
+  const q = query.trim();
+  if (!q) return [];
+  try {
+    const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": config.googlePlacesApiKey,
+        "X-Goog-FieldMask":
+          "places.displayName,places.rating,places.userRatingCount,places.internationalPhoneNumber,places.websiteUri,places.formattedAddress,places.location",
+      },
+      body: JSON.stringify({ textQuery: q, maxResultCount: Math.min(limit, 20) }),
+    });
+    if (!res.ok) return [];
+    const json = (await res.json()) as {
+      places?: {
+        displayName?: { text?: string };
+        rating?: number;
+        userRatingCount?: number;
+        internationalPhoneNumber?: string;
+        websiteUri?: string;
+        formattedAddress?: string;
+        location?: { latitude?: number; longitude?: number };
+      }[];
+    };
+    return (json.places ?? [])
+      .filter((p) => p.displayName?.text)
+      .slice(0, limit)
+      .map((p) => ({
+        name: p.displayName!.text!,
+        rating: typeof p.rating === "number" ? p.rating : null,
+        userRatingCount: typeof p.userRatingCount === "number" ? p.userRatingCount : null,
+        phone: p.internationalPhoneNumber ? p.internationalPhoneNumber.replace(/[^\d+]/g, "") : null,
+        website: p.websiteUri ?? null,
+        address: p.formattedAddress ?? null,
+        lat: typeof p.location?.latitude === "number" ? p.location.latitude : null,
+        lng: typeof p.location?.longitude === "number" ? p.location.longitude : null,
+      }));
+  } catch (err) {
+    console.error("searchSpecialists failed", err);
+    return [];
+  }
+}
+
 /** Geocode a free-text location ("Seattle, WA", "98101") to a center point, or null. */
 export async function geocode(location: string): Promise<{ lat: number; lng: number } | null> {
   if (!enabled.googlePlaces()) return null;

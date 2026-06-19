@@ -11,7 +11,7 @@ import { prisma } from "../db.js";
 import { runTool, runText } from "./llm-tool.js";
 import { classifySpecialty } from "./providers.js";
 import { searchPhysicians as npiSearch, type NpiPhysician } from "./npi.js";
-import { lookupPlaceRating, lookupPlaceReviews, geocode, type PlaceRating } from "./lookup.js";
+import { lookupPlaceRating, lookupPlaceReviews, geocode, searchSpecialists, type PlaceRating } from "./lookup.js";
 import { enabled } from "../config.js";
 
 export type NetworkStatus = "in_network" | "out_of_network" | "unconfirmed" | "unknown";
@@ -31,7 +31,7 @@ export interface PhysicianResult {
   distanceMiles: number | null;
   matchReasons: string[];
   networkStatus: NetworkStatus;
-  source: "npi" | "mock";
+  source: "npi" | "places" | "mock";
 }
 
 export interface PhysicianSearchOutput {
@@ -238,6 +238,7 @@ function scorePhysician(
   resolved: ResolvedCondition,
   audience: PatientAudience,
   center: Coordinates | null,
+  source: "npi" | "places" | "mock",
 ): Scored {
   const reasons: string[] = [];
   let score = 0;
@@ -298,11 +299,43 @@ function scorePhysician(
       rating: rating?.rating ?? null,
       reviewCount: rating?.userRatingCount ?? null,
       distanceMiles,
-      source: enabled.npiRegistry() ? "npi" : "mock",
+      source,
     },
     score,
     reasons,
   };
+}
+
+/** Treat a Places relevance hit (clinic or named doctor) as a scored candidate, reusing scorePhysician. */
+function scoreSpecialistPlace(
+  place: { name: string } & PlaceRating,
+  resolved: ResolvedCondition,
+  audience: PatientAudience,
+  center: Coordinates | null,
+): Scored {
+  const synthetic: NpiPhysician = {
+    npi: "",
+    firstName: "",
+    lastName: "",
+    name: place.name,
+    credential: null,
+    taxonomyDesc: [resolved.npiTaxonomy ?? titleCase(resolved.specialty), resolved.subspecialty ? titleCase(resolved.subspecialty) : null]
+      .filter(Boolean)
+      .join(" · "),
+    address: place.address,
+    city: null,
+    state: null,
+    postalCode: null,
+    phone: place.phone,
+  };
+  // A relevance hit already matched the condition in Google's index, so credit the taxonomy match.
+  const scored = scorePhysician(synthetic, place, { ...resolved, npiTaxonomy: resolved.npiTaxonomy }, audience, center, "places");
+  return scored;
+}
+
+function titleCase(s: string | null): string {
+  if (!s) return "";
+  return s.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 export interface PhysicianSearchInput {
@@ -356,15 +389,37 @@ export async function searchPhysicians(input: PhysicianSearchInput): Promise<Phy
     (c) => !isAlliedHealth(c.credential) && !(audience.isMinor === false && PEDIATRIC_RE.test(c.taxonomyDesc ?? "")),
   );
 
-  // Enrich with Google ratings + location (quality + distance signal).
+  // Enrich the NPI page with Google ratings + location (quality + distance signal).
+  const npiSource: "npi" | "mock" = enabled.npiRegistry() ? "npi" : "mock";
   const ratings = await Promise.all(filtered.map((c) => lookupPlaceRating(c.name, c.address)));
-  let scored = filtered.map((c, i) => scorePhysician(c, ratings[i], resolved, audience, center));
+  const npiScored = filtered.map((c, i) => scorePhysician(c, ratings[i], resolved, audience, center, npiSource));
+
+  // Discovery: on the first page, add Google's relevance-ranked specialists/clinics for the resolved
+  // specialty. NPI lists every neurologist alphabetically with no "headache" signal, so the actual
+  // experts (e.g. a headache center) are buried hundreds deep — this surfaces them by relevance + rating.
+  let placesScored: Scored[] = [];
+  if (offset === 0) {
+    const terms = [resolved.subspecialty, resolved.specialty].filter(Boolean).join(" ").trim() || resolved.npiTaxonomy || "";
+    const query = input.location ? `${terms} near ${input.location}` : terms;
+    const places = query ? await searchSpecialists(query, 8) : [];
+    placesScored = places.map((p) => scoreSpecialistPlace(p, resolved, audience, center));
+  }
+
+  // Merge NPI + discovery, dedupe by normalized name (keep the higher-scored — discovery usually wins on rating).
+  const byKey = new Map<string, Scored>();
+  for (const s of [...placesScored, ...npiScored]) {
+    const key = s.result.name.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const existing = byKey.get(key);
+    if (!existing || s.score > existing.score) byKey.set(key, s);
+  }
+  let scored = Array.from(byKey.values());
 
   // Radius filter: drop providers we KNOW are beyond the radius; keep those we couldn't geocode.
   if (radiusMiles != null) {
     scored = scored.filter((s) => s.result.distanceMiles == null || s.result.distanceMiles <= radiusMiles);
   }
   scored.sort((a, b) => b.score - a.score);
+  scored = scored.slice(0, limit);
 
   // In-network: member carriers + any saved directory provider's tagged accepted carriers.
   const member = await memberCarriers(input.subjectUserId);
