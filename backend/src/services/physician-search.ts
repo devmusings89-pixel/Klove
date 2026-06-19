@@ -191,6 +191,11 @@ export async function patientAudience(subjectUserId: string): Promise<PatientAud
 
 // ---- Ranking ----
 
+// Bayesian prior for rating shrinkage: an assumed average clinic rating and how many reviews a place
+// needs before its own average outweighs that prior.
+const RATING_PRIOR_MEAN = 4.0;
+const RATING_PRIOR_WEIGHT = 20;
+
 interface Scored {
   result: Omit<PhysicianResult, "matchReasons" | "networkStatus">;
   score: number;
@@ -222,12 +227,17 @@ function scorePhysician(
     reasons.push("Pediatric specialist");
   }
 
-  // Ratings as a quality proxy: weight the average by how many reviews back it (log-damped).
+  // Ratings as a quality proxy, rating-led with review count as CONFIDENCE (Bayesian shrinkage): a few
+  // glowing reviews are pulled toward the prior mean so a 5★ (1 review) doesn't beat a solid 4.5★ (200),
+  // and a high-volume mediocre score doesn't beat a high rating. Unrated providers sit neutral (the
+  // prior) rather than dead last, so a doctor with no Google listing isn't punished below a 2-star one.
+  let quality = RATING_PRIOR_MEAN;
   if (rating?.rating != null) {
-    const count = rating.userRatingCount ?? 0;
-    score += rating.rating * (1 + Math.log10(1 + count));
-    reasons.push(count > 0 ? `${rating.rating.toFixed(1)}★ · ${count} reviews` : `${rating.rating.toFixed(1)}★`);
+    const v = rating.userRatingCount ?? 0;
+    quality = (v / (v + RATING_PRIOR_WEIGHT)) * rating.rating + (RATING_PRIOR_WEIGHT / (v + RATING_PRIOR_WEIGHT)) * RATING_PRIOR_MEAN;
+    reasons.push(v > 0 ? `${rating.rating.toFixed(1)}★ · ${v} reviews` : `${rating.rating.toFixed(1)}★`);
   }
+  score += quality * 3; // dominant differentiator among same-specialty candidates (range ~7.5–15)
 
   const phone = rating?.phone ?? npi.phone;
   const website = rating?.website ?? null;
