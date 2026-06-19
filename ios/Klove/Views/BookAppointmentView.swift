@@ -152,6 +152,10 @@ struct BookAppointmentView: View {
                         if let phone = m.phone { Text(phone).font(.caption2).foregroundStyle(Theme.inkSecondary) }
                         if let address = m.address { Text(address).font(.caption2).foregroundStyle(Theme.inkSecondary) }
                     }
+                } else if !phone.isEmpty || !website.isEmpty {
+                    // We already have a way to reach this office (prefilled from search, or typed).
+                    Label("Klove has this office's contact details.", systemImage: "checkmark.circle.fill")
+                        .font(.caption.weight(.semibold)).foregroundStyle(Theme.handled)
                 } else if provider.trimmingCharacters(in: .whitespaces).count >= 3 {
                     Label("Couldn't find that office — add a phone or website below so Klove can reach it.",
                           systemImage: "questionmark.circle")

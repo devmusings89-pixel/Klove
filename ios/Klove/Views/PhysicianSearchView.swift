@@ -330,15 +330,66 @@ struct PhysicianDetailView: View {
     @ViewBuilder
     private var reviewsSection: some View {
         if let d = detail, !d.reviews.isEmpty {
-            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                 sectionLabel("What patients say")
-                ForEach(Array(d.reviews.prefix(4).enumerated()), id: \.offset) { _, r in
-                    Text("“\(r)”").font(.caption).foregroundStyle(Theme.inkSecondary)
+                ForEach(Array(d.reviews.prefix(4).enumerated()), id: \.offset) { idx, r in
+                    if idx > 0 { Divider() }
+                    reviewQuote(r)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .kloveCard()
         }
+    }
+
+    /// A single review: trimmed to a readable length, with the search's key terms highlighted.
+    private func reviewQuote(_ text: String) -> some View {
+        Text(highlightedReview(trimReview(text)))
+            .font(.caption)
+            .foregroundStyle(Theme.inkSecondary)
+            .padding(.leading, Theme.Spacing.sm)
+            .overlay(alignment: .leading) { Rectangle().fill(Theme.accent.opacity(0.3)).frame(width: 2) }
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Cap a review to ~280 chars on a word boundary so long rants stay scannable.
+    private func trimReview(_ text: String) -> String {
+        let clean = text.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
+        guard clean.count > 280 else { return clean }
+        let cut = clean.prefix(280)
+        let end = cut.lastIndex(of: " ") ?? cut.endIndex
+        return String(cut[..<end]) + "…"
+    }
+
+    /// Search terms worth highlighting in reviews (from the condition + resolved specialty).
+    private var reviewKeywords: [String] {
+        let stop: Set<String> = ["experience", "solving", "with", "that", "this", "from", "your", "there",
+                                 "they", "have", "about", "doctor", "doctors", "clinic", "near", "want"]
+        var words = Set<String>()
+        for src in [model.condition, model.resolvedSubspecialty ?? "", model.resolvedSpecialty ?? ""] {
+            for w in src.lowercased().split(whereSeparator: { !$0.isLetter }) where w.count >= 4 && !stop.contains(String(w)) {
+                words.insert(String(w))
+            }
+        }
+        return Array(words)
+    }
+
+    /// Bold + accent the key terms within a review string.
+    private func highlightedReview(_ text: String) -> AttributedString {
+        var attr = AttributedString("“\(text)”")
+        let hay = String(attr.characters).lowercased()
+        for term in reviewKeywords {
+            var from = hay.startIndex
+            while let range = hay.range(of: term, range: from..<hay.endIndex) {
+                if let lo = AttributedString.Index(range.lowerBound, within: attr),
+                   let hi = AttributedString.Index(range.upperBound, within: attr) {
+                    attr[lo..<hi].foregroundColor = Theme.ink
+                    attr[lo..<hi].font = .caption.weight(.bold)
+                }
+                from = range.upperBound
+            }
+        }
+        return attr
     }
 
     private var saveButton: some View {
