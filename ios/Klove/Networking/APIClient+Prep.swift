@@ -24,9 +24,17 @@ extension APIClient {
         return r.match
     }
 
+    /// Step 1 of booking: resolve the provider (known-provider directory → Places) and the patient's
+    /// details, and get a recap to CONFIRM. No calls are placed. status "ready" → show recap + confirm;
+    /// "needs_provider" → let the operator pick from `candidates` or add a new provider, then prepare again.
+    func prepareBooking(_ memberId: String, reason: String, provider: String? = nil, specialty: String? = nil, preferredTimes: String? = nil, phone: String? = nil, website: String? = nil, insurancePlanId: String? = nil) async throws -> BookingPlan {
+        try await post("/members/\(memberId)/book/prepare", body: BookBody(reason: reason, provider: provider, specialty: specialty, preferredDate: nil, preferredTimes: preferredTimes, phone: phone, website: website, insurancePlanId: insurancePlanId))
+    }
+
+    /// Step 2: place the booking the operator confirmed (originated in the app).
     @discardableResult
-    func bookForMember(_ memberId: String, reason: String, provider: String?, preferredDate: String? = nil, preferredTimes: String? = nil, phone: String? = nil, website: String? = nil, insurancePlanId: String? = nil) async throws -> BookingOutcome {
-        try await post("/members/\(memberId)/book", body: BookBody(reason: reason, provider: provider, preferredDate: preferredDate, preferredTimes: preferredTimes, phone: phone, website: website, insurancePlanId: insurancePlanId))
+    func bookForMember(_ memberId: String, reason: String, provider: String?, specialty: String? = nil, preferredDate: String? = nil, preferredTimes: String? = nil, phone: String? = nil, website: String? = nil, insurancePlanId: String? = nil) async throws -> BookingOutcome {
+        try await post("/members/\(memberId)/book", body: BookBody(reason: reason, provider: provider, specialty: specialty, preferredDate: preferredDate, preferredTimes: preferredTimes, phone: phone, website: website, insurancePlanId: insurancePlanId))
     }
 
     @discardableResult
@@ -100,10 +108,40 @@ private struct OfficeLookupResponse: Decodable { let match: OfficeMatch? }
 private struct BookBody: Encodable {
     let reason: String
     let provider: String?
+    let specialty: String?
     let preferredDate: String?
     let preferredTimes: String?
     let phone: String?
     let website: String?
     let insurancePlanId: String?
+}
+
+/// Recap returned by POST /members/:id/book/prepare — the operator confirms this before any calls.
+struct BookingPlan: Decodable {
+    let status: String          // "ready" | "needs_provider"
+    let reason: String
+    let provider: PlanProvider?
+    let candidates: [PlanProvider]
+    let missing: [String]
+    let patientName: String
+    let insuranceLabel: String
+    let preferredTimes: String
+    let recap: String
+
+    var isReady: Bool { status == "ready" }
+}
+
+/// A provider resolved for / offered by the booking flow (from the directory, Places, or explicit input).
+struct PlanProvider: Decodable, Hashable, Identifiable {
+    let providerId: String?
+    let name: String
+    let phone: String?
+    let website: String?
+    let address: String?
+    let specialty: String?
+    let source: String
+
+    enum CodingKeys: String, CodingKey { case providerId = "id", name, phone, website, address, specialty, source }
+    var id: String { providerId ?? name }
 }
 private struct VisitSummaryBody: Encodable { let summary: String; let followUps: [String] }

@@ -36,3 +36,16 @@ export async function notifyUser(userId: string, opts: NotifyOptions): Promise<v
   if (!within) return;
   await sendWhatsApp(u.whatsappPhone, `${title}\n${body}`).catch((e) => console.error("notify whatsapp failed", e));
 }
+
+/**
+ * Notify the user on the channel a flow was initiated from, so a confirmation lands where they're
+ * looking. `app` → push only (the in-app inbox Message is written by the caller). `whatsapp` → push +
+ * WhatsApp. `null`/unknown → both (the legacy broadcast, for flows with no recorded origin).
+ */
+export async function notifyOnChannel(userId: string, originChannel: string | null, opts: NotifyOptions): Promise<void> {
+  if (originChannel === "app") {
+    await sendPushToUser(userId, opts.title, opts.body, opts.force ?? false, opts.link).catch((e) => console.error("notify push failed", e));
+    return;
+  }
+  await notifyUser(userId, opts);
+}

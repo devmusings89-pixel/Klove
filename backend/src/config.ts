@@ -64,6 +64,15 @@ export const config = {
 
   googlePlacesApiKey: process.env.GOOGLE_PLACES_API_KEY ?? "",
 
+  // Physician search ("best expert for my condition"). The NPI Registry (npiregistry.cms.hhs.gov) is a
+  // free, keyless public US API, so we gate it on an explicit opt-in rather than a key — off by default
+  // so dev/tests stay hermetic (deterministic seeded specialists), consistent with mock-by-default.
+  // Set PHYSICIAN_SEARCH_LIVE=true to hit the real registry; Places ratings + LLM specialty resolution
+  // layer on independently when their keys are present.
+  physicianSearch: {
+    live: (process.env.PHYSICIAN_SEARCH_LIVE ?? "false") === "true",
+  },
+
   // OpenRouter — when OPENROUTER_API_KEY is set, ALL Anthropic/analysis LLM calls (extraction,
   // analysis, Ask, intake, triage, prep) route through OpenRouter's OpenAI-compatible API against an
   // Anthropic model. No direct ANTHROPIC_API_KEY needed; OpenRouter takes priority over it.
@@ -133,6 +142,7 @@ export const enabled = {
   stripe: () => Boolean(config.stripe.secretKey),
   resend: () => Boolean(config.resend.apiKey),
   googlePlaces: () => Boolean(config.googlePlacesApiKey),
+  npiRegistry: () => config.physicianSearch.live,
   // openai-compatible (Ollama) needs no key; anthropic needs ANTHROPIC_API_KEY.
   web: () => (config.webAgent.provider === "openai-compatible" ? true : Boolean(config.anthropicApiKey)),
   apns: () => Boolean(config.apns.keyId && config.apns.teamId && config.apns.bundleId && config.apns.keyPath),

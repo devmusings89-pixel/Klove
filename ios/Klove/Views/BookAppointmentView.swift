@@ -12,11 +12,14 @@ struct BookAppointmentView: View {
 
     @State private var memberId: String
     @State private var memberName: String
-    @State private var reason = ""
+    @State private var reason: String
     @State private var provider = ""
     @State private var phone = ""
     @State private var website = ""
     @State private var preferredTimes = ""
+    @State private var preparing = false
+    @State private var plan: BookingPlan?
+    @State private var showProviderPicker = false
     @State private var booking = false
     @State private var outcome: BookingOutcome?
     @State private var errorMessage: String?
@@ -28,9 +31,10 @@ struct BookAppointmentView: View {
     @State private var showAddInsurance = false
     private let api = APIClient()
 
-    init(memberId: String, memberName: String, allowMemberChange: Bool = false, onBooked: @escaping () -> Void = {}) {
+    init(memberId: String, memberName: String, allowMemberChange: Bool = false, initialReason: String = "", onBooked: @escaping () -> Void = {}) {
         _memberId = State(initialValue: memberId)
         _memberName = State(initialValue: memberName)
+        _reason = State(initialValue: initialReason)
         self.allowMemberChange = allowMemberChange
         self.onBooked = onBooked
     }
@@ -38,7 +42,9 @@ struct BookAppointmentView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if let o = outcome { confirmation(o) } else { form }
+                if let o = outcome { confirmation(o) }
+                else if let p = plan { recap(p) }
+                else { form }
             }
             .navigationTitle("Book a visit")
             .navigationBarTitleDisplayMode(.inline)
@@ -47,10 +53,11 @@ struct BookAppointmentView: View {
             } message: { Text(errorMessage ?? "") }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button(outcome == nil ? "Cancel" : "Done") { dismiss() } }
-                if outcome == nil {
+                // Form → Review (prepare, no calls); the recap screen owns the final Confirm button.
+                if outcome == nil && plan == nil {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Book") { Task { await book() } }
-                            .disabled(reason.trimmingCharacters(in: .whitespaces).isEmpty || booking)
+                        Button("Review") { Task { await prepare() } }
+                            .disabled(reason.trimmingCharacters(in: .whitespaces).isEmpty || preparing)
                     }
                 }
             }
@@ -59,6 +66,14 @@ struct BookAppointmentView: View {
             .sheet(isPresented: $showAddInsurance) {
                 AddInsuranceView(memberId: memberId, memberName: memberName, isFirstCard: cards.isEmpty) {
                     Task { await loadCards() }
+                }
+            }
+            .sheet(isPresented: $showProviderPicker) {
+                ProviderPickerView(memberId: memberId) { picked in
+                    provider = picked.name
+                    phone = picked.phone ?? ""
+                    website = picked.website ?? ""
+                    plan = nil // back to the form with the chosen provider filled in
                 }
             }
         }
@@ -152,6 +167,82 @@ struct BookAppointmentView: View {
         }
     }
 
+    // The confirm step: a recap of exactly what Klove will do before any calls are placed. When no
+    // provider could be resolved (status needs_provider), the operator picks one from the directory
+    // candidates or searches/adds a new one.
+    @ViewBuilder
+    private func recap(_ p: BookingPlan) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(p.isReady ? "Confirm the details" : "Pick a provider")
+                    .font(.title3.weight(.semibold)).foregroundStyle(Theme.ink)
+                Text(p.recap).font(.subheadline).foregroundStyle(Theme.inkSecondary)
+
+                recapDetails(p)
+
+                if !p.missing.isEmpty {
+                    Text("Klove will proceed without \(p.missing.joined(separator: ", ")). Add it for a smoother call.")
+                        .font(.caption).foregroundStyle(Theme.needsYou)
+                }
+
+                if p.isReady {
+                    Button { Task { await book(p) } } label: {
+                        Label("Confirm & book", systemImage: "checkmark.circle.fill")
+                    }
+                    .buttonStyle(KlovePrimaryButtonStyle()).disabled(booking)
+                } else {
+                    recapCandidates(p)
+                }
+
+                Button("Edit details") { plan = nil }.font(.caption).tint(Theme.accent)
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(Theme.background.ignoresSafeArea())
+    }
+
+    @ViewBuilder
+    private func recapDetails(_ p: BookingPlan) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let prov = p.provider {
+                Label(prov.name, systemImage: "stethoscope").font(.subheadline.weight(.medium)).foregroundStyle(Theme.ink)
+                if let ph = prov.phone, !ph.isEmpty { Label(ph, systemImage: "phone").font(.caption).foregroundStyle(Theme.inkSecondary) }
+                if let web = prov.website, !web.isEmpty { Label(web, systemImage: "globe").font(.caption).foregroundStyle(Theme.inkSecondary) }
+            }
+            Label("For \(p.patientName)", systemImage: "person.fill").font(.caption).foregroundStyle(Theme.inkSecondary)
+            if !p.insuranceLabel.isEmpty { Label("Insurance: \(p.insuranceLabel)", systemImage: "creditcard").font(.caption).foregroundStyle(Theme.inkSecondary) }
+            if !p.preferredTimes.isEmpty { Label(p.preferredTimes, systemImage: "clock").font(.caption).foregroundStyle(Theme.inkSecondary) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .kloveCard()
+    }
+
+    @ViewBuilder
+    private func recapCandidates(_ p: BookingPlan) -> some View {
+        Text("Klove doesn't have a way to reach an office yet. Pick a known provider or add one:")
+            .font(.subheadline).foregroundStyle(Theme.ink)
+        ForEach(p.candidates) { c in
+            Button { Task { await book(p, chosen: c) } } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(c.name).foregroundStyle(Theme.ink)
+                        if let ph = c.phone, !ph.isEmpty { Text(ph).font(.caption2).foregroundStyle(Theme.inkSecondary) }
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(Theme.inkSecondary)
+                }
+                .padding(.vertical, 10).padding(.horizontal, 12)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+            }
+            .disabled(booking)
+        }
+        Button { showProviderPicker = true } label: {
+            Label("Search or add a provider", systemImage: "magnifyingglass")
+        }
+        .tint(Theme.accent)
+    }
+
     @ViewBuilder
     private func confirmation(_ o: BookingOutcome) -> some View {
         ScrollView {
@@ -203,17 +294,40 @@ struct BookAppointmentView: View {
         return o.isConfirmed ? Theme.handled : Theme.accent
     }
 
-    private func book() async {
-        booking = true
-        defer { booking = false }
+    /// Step 1: resolve the provider + details and show a recap to confirm. No calls are placed.
+    private func prepare() async {
+        preparing = true
+        defer { preparing = false }
         do {
-            outcome = try await api.bookForMember(
+            plan = try await api.prepareBooking(
                 memberId,
                 reason: reason.trimmingCharacters(in: .whitespaces),
                 provider: provider.isEmpty ? nil : provider,
                 preferredTimes: preferredTimes.isEmpty ? nil : preferredTimes,
                 phone: phone.isEmpty ? nil : phone,
                 website: website.isEmpty ? nil : website,
+                insurancePlanId: selectedCardId
+            )
+        } catch {
+            errorMessage = (error as? AppError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Step 2: place the confirmed booking. `chosen` overrides the provider when the operator picked
+    /// one from the needs-provider candidates; otherwise the prepared plan's provider/form values are used.
+    private func book(_ p: BookingPlan, chosen: PlanProvider? = nil) async {
+        booking = true
+        defer { booking = false }
+        let prov = chosen ?? p.provider
+        do {
+            outcome = try await api.bookForMember(
+                memberId,
+                reason: reason.trimmingCharacters(in: .whitespaces),
+                provider: prov?.name ?? (provider.isEmpty ? nil : provider),
+                specialty: prov?.specialty,
+                preferredTimes: preferredTimes.isEmpty ? nil : preferredTimes,
+                phone: prov?.phone ?? (phone.isEmpty ? nil : phone),
+                website: prov?.website ?? (website.isEmpty ? nil : website),
                 insurancePlanId: selectedCardId
             )
             store.bumpData()   // refresh Today/Actions so the booking shows up

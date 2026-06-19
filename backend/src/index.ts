@@ -19,6 +19,7 @@ import { reminderRoutes } from "./routes/reminders.js";
 import { medicationRoutes } from "./routes/medications.js";
 import { notificationRoutes } from "./routes/notifications.js";
 import { prepRoutes } from "./routes/prep.js";
+import { providerRoutes } from "./routes/providers.js";
 import { askRoutes } from "./routes/ask.js";
 import { deviceRoutes } from "./routes/devices.js";
 import { preferenceRoutes } from "./routes/preferences.js";
@@ -194,6 +195,7 @@ await app.register(reminderRoutes);
 await app.register(medicationRoutes);
 await app.register(notificationRoutes);
 await app.register(prepRoutes);
+await app.register(providerRoutes);
 await app.register(askRoutes);
 await app.register(deviceRoutes);
 await app.register(preferenceRoutes);
@@ -226,6 +228,8 @@ function simulatedSubsystems(): { name: string; fix: string }[] {
     out.push({ name: "Vapi call-result callbacks (unauthenticated — anyone could POST results)", fix: "VAPI_WEBHOOK_SECRET" });
   if (!enabled.googlePlaces())
     out.push({ name: "Office phone lookup (live booking falls back to simulated without contact info)", fix: "GOOGLE_PLACES_API_KEY" });
+  if (!enabled.npiRegistry())
+    out.push({ name: "Physician search (returns deterministic seeded specialists instead of the NPI registry)", fix: "PHYSICIAN_SEARCH_LIVE=true" });
   if (!enabled.stripe())
     out.push({ name: "Payments (mock-payment endpoint instead of Stripe)", fix: "STRIPE_SECRET_KEY" });
   if (!enabled.resend())

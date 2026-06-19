@@ -6,7 +6,7 @@ import { placeNextCall, recordCallResult, ACTIVE_CALL_STATES } from "../services
 import { reconcileConciergeJobs } from "../services/concierge.js";
 import type { CallStructuredData } from "../types.js";
 import { gmailSource } from "../sources/gmail.js";
-import { aggregatorSource } from "../sources/aggregator.js";
+import { aggregatorSource, verifyWebhookSignature } from "../sources/aggregator.js";
 import { ingestArtifact } from "../services/ingestion.js";
 import { syncConnection } from "../services/health-worker.js";
 import { encryptToken } from "../services/crypto.js";
@@ -184,15 +184,27 @@ export async function webhookRoutes(app: FastifyInstance) {
     return reply.send({ received: true });
   });
 
-  // ---- Aggregator (health-records vendor) ----
+  // ---- Aggregator (health-records vendor: Metriport) ----
   app.post("/webhooks/aggregator", async (req, reply) => {
     if (!enabled.aggregator()) return reply.code(400).send({ error: "aggregator_not_configured" });
+
+    // Metriport signs each delivery: HMAC-SHA256 of the raw body in x-metriport-signature.
+    // Mandatory in production (fail closed); optional in dev so the pipeline stays exercisable.
     if (config.aggregator.webhookSecret) {
-      const secret = req.headers["x-webhook-key"];
-      if (secret !== config.aggregator.webhookSecret) return reply.code(401).send({ error: "unauthorized" });
+      const sig = req.headers["x-metriport-signature"];
+      if (!verifyWebhookSignature(req.rawBody as Buffer, sig)) {
+        return reply.code(401).send({ error: "invalid_signature" });
+      }
+    } else if (isProduction) {
+      return reply.code(503).send({ error: "webhook_not_configured" });
     }
+
+    // Endpoint-validation handshake: echo the ping value back as { pong }.
+    const body = req.body as { ping?: string };
+    if (body?.ping) return reply.send({ pong: body.ping });
+
     try {
-      const { userId, artifacts } = await aggregatorSource.handleWebhook!(req.body);
+      const { userId, artifacts } = await aggregatorSource.handleWebhook!(body);
       if (userId) for (const a of artifacts) await ingestArtifact(userId, "aggregator", a);
     } catch (err) {
       app.log.error({ err }, "aggregator webhook handling failed");

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../db.js";
 import { requireUser, resolveSubject, isConsentError } from "../services/auth.js";
-import { ensureHousehold, accessibleSubjects } from "../services/household.js";
+import { accessibleSubjects } from "../services/household.js";
 import { placeBookingCallback } from "../services/orchestrator.js";
 import { fromJson } from "../services/json.js";
 
@@ -119,42 +119,65 @@ export async function taskRoutes(app: FastifyInstance) {
     return reply.send({ ok: true, slot });
   });
 
-  // Hand a task to the concierge engine — creates a (human-tier) Session and marks the task waiting.
-  // Phase 4 fleshes out the booking handoff; here we create the job and link it.
-  app.post<{ Params: { id: string } }>("/tasks/:id/route-to-concierge", { preHandler: requireUser }, async (req, reply) => {
+  // Borderline health-insight → "Book a follow-up". Convert the review task into a booking task the
+  // user can act on through the normal booking path. Honest in mock mode: no fake "handling".
+  app.post<{ Params: { id: string } }>("/tasks/:id/book-follow-up", { preHandler: requireUser }, async (req, reply) => {
     const task = await prisma.task.findUnique({ where: { id: req.params.id } });
     if (!task) return reply.code(404).send({ error: "not_found" });
     try {
-      await resolveSubject(req, task.subjectUserId, { need: "operate" });
+      await resolveSubject(req, task.subjectUserId, { need: "manage" });
     } catch (err) {
       return reply.code(isConsentError(err) ? 403 : 500).send({ error: "forbidden" });
     }
-    await ensureHousehold(req.user!.id);
-    const session = await prisma.session.create({
-      data: {
-        userId: task.subjectUserId,
-        tier: "human",
-        kind: "booking",
-        status: "draft",
-        patientInfo: JSON.stringify({ reason: task.title }),
-      },
-    });
+    const followUp = fromJson<{ recommendedSpecialty?: string }>(task.followUpJson, {});
+    const specialty = followUp?.recommendedSpecialty;
+    const detail = specialty
+      ? `Book a follow-up with ${specialty} to review: ${task.title}`
+      : `Book a follow-up to review: ${task.title}`;
     const updated = await prisma.task.update({
       where: { id: task.id },
-      data: { state: "waiting", conciergeJobId: session.id },
+      data: { state: "needs_you", kind: "book", detail },
     });
-    // Make the handoff tangible: a confirmation lands in the inbox so the user knows a person has it.
-    await prisma.message.create({
-      data: {
-        householdId: task.householdId,
-        subjectUserId: task.subjectUserId,
-        direction: "out",
-        channel: "inapp",
-        title: "Handed to a specialist",
-        body: `A Klove specialist is taking over "${task.title}" and will update you here.`,
-        relatedTaskId: task.id,
-      },
-    });
-    return { ...updated, conciergeJobId: session.id };
+    return { ...updated, options: fromJson<string[]>(updated.options, []), booking: fromJson<unknown>(updated.bookingJson, null), followUp: fromJson<unknown>(updated.followUpJson, null) };
   });
+
+  // Borderline health-insight → "Add as a question to an upcoming visit". Attaches the insight to a
+  // scheduled appointment's notes so it's raised at the visit, and marks the insight handled.
+  app.post<{ Params: { id: string }; Body: { appointmentId?: string; question?: string } }>(
+    "/tasks/:id/attach-question",
+    { preHandler: requireUser },
+    async (req, reply) => {
+      const task = await prisma.task.findUnique({ where: { id: req.params.id } });
+      if (!task) return reply.code(404).send({ error: "not_found" });
+      try {
+        await resolveSubject(req, task.subjectUserId, { need: "manage" });
+      } catch (err) {
+        return reply.code(isConsentError(err) ? 403 : 500).send({ error: "forbidden" });
+      }
+      const appointmentId = req.body?.appointmentId;
+      if (!appointmentId) return reply.code(400).send({ error: "missing_appointment" });
+      const appt = await prisma.appointment.findUnique({ where: { id: appointmentId } });
+      // The appointment must belong to the same member and still be upcoming.
+      if (!appt || appt.userId !== task.subjectUserId || appt.status !== "scheduled" || !appt.startsAt || appt.startsAt < new Date()) {
+        return reply.code(404).send({ error: "appointment_not_available" });
+      }
+      const question = (req.body?.question?.trim() || task.title).trim();
+      const line = `Question to raise: ${question}`;
+      const notes = appt.notes ? `${appt.notes}\n${line}` : line;
+      await prisma.appointment.update({ where: { id: appt.id }, data: { notes } });
+      await prisma.task.update({ where: { id: task.id }, data: { state: "handled" } });
+      await prisma.message.create({
+        data: {
+          householdId: task.householdId,
+          subjectUserId: task.subjectUserId,
+          direction: "out",
+          channel: "inapp",
+          title: "Added to your upcoming visit",
+          body: `We'll raise "${question}" at your ${appt.provider ? `${appt.provider} ` : ""}visit.`,
+          relatedTaskId: task.id,
+        },
+      });
+      return reply.send({ ok: true });
+    },
+  );
 }

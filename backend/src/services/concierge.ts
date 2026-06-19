@@ -12,9 +12,13 @@ import { config, enabled } from "../config.js";
 import { toJson, fromJson } from "./json.js";
 import { placeNextCall } from "./orchestrator.js";
 import { lookupPhoneNumber, lookupWebsite } from "./lookup.js";
-import { notifyUser } from "./notify.js";
+import { notifyOnChannel } from "./notify.js";
 import { decryptToken } from "./crypto.js";
+import { resolveProvider, upsertProvider, classifySpecialty, listProviders } from "./providers.js";
 import type { CallStructuredData } from "../types.js";
+
+/** The channel a booking was initiated from — confirmations/updates route back to it. */
+export type OriginChannel = "app" | "whatsapp";
 
 /**
  * Assemble the patient details the AI needs to introduce on the call (name, DOB, insurance), pulled
@@ -56,11 +60,17 @@ async function buildPatientInfo(
   };
 }
 
-/** Notify the operator who runs this household (push + WhatsApp via the channel-aware dispatcher).
+/** Notify the operator who runs this household, routed to the channel the booking came from.
  * `link` deep-links the push to the right tab on tap ("actions" for needs-you, "today" for booked). */
-async function pushToOperator(householdId: string, title: string, body: string, link?: string): Promise<void> {
+async function pushToOperator(
+  householdId: string,
+  title: string,
+  body: string,
+  link?: string,
+  originChannel?: string | null,
+): Promise<void> {
   const hh = await prisma.household.findUnique({ where: { id: householdId }, select: { operatorUserId: true } });
-  if (hh) await notifyUser(hh.operatorUserId, { title, body, link }).catch((e) => console.error("operator notify failed", e));
+  if (hh) await notifyOnChannel(hh.operatorUserId, originChannel ?? null, { title, body, link }).catch((e) => console.error("operator notify failed", e));
 }
 
 export interface BookingInput {
@@ -81,6 +91,9 @@ export interface BookingInput {
   dob?: string; // ISO yyyy-mm-dd
   insurance?: string; // carrier (+ plan) as free text, e.g. "Aetna PPO"
   memberId?: string; // insurance member/subscriber ID
+  specialty?: string; // normalized specialty (e.g. "dentist"), to scope provider resolution + capture
+  // Channel this booking was initiated from. Confirmations and needs-you prompts route back to it.
+  originChannel?: OriginChannel;
 }
 
 export interface BookingOutcome {
@@ -124,10 +137,11 @@ export async function bookAppointment(
 ): Promise<BookingOutcome> {
   // Booking is free and operator-authorized — Klove contacts the office right away.
   const hasContact = Boolean(input.phone || input.website || input.email);
-  // With Google Places + a provider name, the orchestrator can look up the office itself — so an
-  // office name alone is enough to book live.
-  const canLookup = enabled.googlePlaces() && Boolean(input.provider?.trim());
-  if (config.liveBooking && (hasContact || canLookup)) {
+  // A provider name is enough to look the office up — first in the household's known-provider
+  // directory, then (if unknown) via Google Places. liveBooking falls back to couldNotBook if nothing
+  // reachable turns up, so a bare reason with no provider still surfaces a needs-you task.
+  const canResolve = hasContact || Boolean(input.provider?.trim());
+  if (config.liveBooking && canResolve) {
     return liveBooking(operatorUserId, subjectUserId, householdId, input);
   }
   return couldNotBook(subjectUserId, householdId, input);
@@ -138,18 +152,33 @@ async function liveBooking(operatorUserId: string, subjectUserId: string, househ
   const reason = input.reason.trim() || "Appointment";
   const provider = input.provider?.trim() || null;
 
-  // Resolve how to reach the office: explicit contact wins; otherwise look it up by name via Places.
+  // Resolve how to reach the office: explicit contact wins; otherwise resolve by name from the
+  // household's known-provider directory first, then Google Places. Keyed on the provider NAME — we
+  // never silently contact an office the operator hasn't chosen.
   let phone = input.phone?.trim() || null;
   let website = input.website?.trim() || null;
   const email = input.email?.trim() || null;
-  if (!phone && !website && !email && provider && enabled.googlePlaces()) {
-    phone = await lookupPhoneNumber(provider);
-    if (!phone) website = await lookupWebsite(provider);
+  let resolvedAddress: string | null = null;
+  if (!phone && !website && !email && provider) {
+    const known = await resolveProvider({ householdId, subjectUserId, providerHint: provider, specialty: input.specialty, reason });
+    if (known.provider) {
+      phone = known.provider.phone ?? null;
+      website = known.provider.website ?? null;
+      resolvedAddress = known.provider.address ?? null;
+    } else if (known.fromPlaces) {
+      phone = known.fromPlaces.phone ?? null;
+      website = known.fromPlaces.website ?? null;
+      resolvedAddress = known.fromPlaces.address ?? null;
+    } else if (enabled.googlePlaces()) {
+      phone = await lookupPhoneNumber(provider);
+      if (!phone) website = await lookupWebsite(provider);
+    }
   }
   // If there's still no way to reach anyone, don't fabricate a booking — surface a task to finish it.
   if (!phone && !website && !email) {
     return couldNotBook(subjectUserId, householdId, input);
   }
+  void resolvedAddress; // captured into the directory on a successful booking (see reconcile)
 
   // Full patient details (name, DOB, insurance) so the AI can introduce the patient on the call.
   const patient = await buildPatientInfo(subjectUserId, operatorUserId, input, reason);
@@ -157,9 +186,10 @@ async function liveBooking(operatorUserId: string, subjectUserId: string, househ
   const session = await prisma.session.create({
     data: {
       userId: subjectUserId,
-      tier: "human",
+      tier: "ai", // Klove books autonomously — there is no human-concierge tier
       kind: "booking",
       status: "paid", // skip payment; concierge job is authorized by the operator
+      originChannel: input.originChannel ?? null,
       patientInfo: toJson(patient),
       targets: {
         create: {
@@ -182,6 +212,7 @@ async function liveBooking(operatorUserId: string, subjectUserId: string, househ
       detail: `Klove is reaching out${provider ? ` to ${provider}` : ""} to schedule this.`,
       state: "waiting",
       kind: "book",
+      originChannel: input.originChannel ?? null,
       conciergeJobId: session.id,
     },
   });
@@ -208,6 +239,7 @@ async function couldNotBook(subjectUserId: string, householdId: string, input: B
       detail: `Klove couldn't reach an office to book this automatically${providerLabel}. Add a phone or website, or pick a provider, to continue.`,
       state: "needs_you",
       kind: "book",
+      originChannel: input.originChannel ?? null,
     },
   });
   await prisma.message.create({
@@ -223,6 +255,91 @@ async function couldNotBook(subjectUserId: string, householdId: string, input: B
   });
 
   return { status: "needs_info", taskId: task.id, title: reason, provider, verified: false };
+}
+
+export interface ResolvedProviderLite {
+  id?: string;
+  name: string;
+  phone?: string | null;
+  website?: string | null;
+  address?: string | null;
+  specialty?: string | null;
+  source: string; // directory | places | explicit | manual | booking | appointment
+}
+
+export interface BookingPlan {
+  // ready = a reachable provider is resolved and the operator can confirm; needs_provider = none
+  // resolved, the operator must pick from `candidates` or add a new one before confirming.
+  status: "ready" | "needs_provider";
+  reason: string;
+  provider: ResolvedProviderLite | null;
+  // Known-provider directory entries for this member (+ shared) to show in the picker.
+  candidates: ResolvedProviderLite[];
+  // Soft-missing details surfaced in the recap (non-blocking): insurance, DOB, preferred time.
+  missing: string[];
+  patientName: string;
+  insuranceLabel: string;
+  preferredTimes: string;
+  // Human-readable line the operator confirms before any calls are placed.
+  recap: string;
+}
+
+/**
+ * Prepare a booking for confirmation — NO calls are placed. Resolves the provider from the household's
+ * known-provider directory (then Google Places), pulls the patient's details, and returns a recap the
+ * operator confirms. The in-app flow renders this, then calls bookAppointment on confirm. When nothing
+ * reachable resolves, returns status "needs_provider" with directory candidates to pick from or add.
+ */
+export async function prepareBooking(
+  operatorUserId: string,
+  subjectUserId: string,
+  householdId: string,
+  input: BookingInput,
+): Promise<BookingPlan> {
+  const reason = input.reason.trim() || "Appointment";
+  const namedProvider = input.provider?.trim() || null;
+  const patient = await buildPatientInfo(subjectUserId, operatorUserId, input, reason);
+
+  let provider: ResolvedProviderLite | null = null;
+  const explicitPhone = input.phone?.trim() || null;
+  const explicitWebsite = input.website?.trim() || null;
+  if (explicitPhone || explicitWebsite) {
+    provider = { name: namedProvider || "the office", phone: explicitPhone, website: explicitWebsite, source: "explicit" };
+  } else {
+    const r = await resolveProvider({ householdId, subjectUserId, providerHint: namedProvider ?? undefined, specialty: input.specialty, reason });
+    if (r.provider) {
+      provider = { id: r.provider.id, name: r.provider.name, phone: r.provider.phone, website: r.provider.website, address: r.provider.address, specialty: r.provider.specialty, source: "directory" };
+    } else if (r.fromPlaces) {
+      provider = { name: r.fromPlaces.displayName, phone: r.fromPlaces.phone, website: r.fromPlaces.website, address: r.fromPlaces.address, source: "places" };
+    }
+  }
+
+  const reachable = Boolean(provider && (provider.phone || provider.website));
+  const candidates = (await listProviders(householdId, { subjectUserId })).map((p) => ({
+    id: p.id, name: p.name, phone: p.phone, website: p.website, address: p.address, specialty: p.specialty, source: p.source,
+  }));
+
+  const missing: string[] = [];
+  if (!patient.insurance) missing.push("insurance");
+  if (!patient.dob) missing.push("date of birth");
+  if (!patient.preferredTimes) missing.push("a preferred time");
+
+  const providerLabel = provider && provider.name !== "the office" ? ` with ${provider.name}` : "";
+  const recap = reachable
+    ? `Book ${reason} for ${patient.name}${providerLabel}${patient.preferredTimes ? `, ${patient.preferredTimes}` : ""}${patient.insurance ? ` · ${patient.insurance}` : ""}.`
+    : `Pick a provider to book ${reason} for ${patient.name}.`;
+
+  return {
+    status: reachable ? "ready" : "needs_provider",
+    reason,
+    provider: reachable ? provider : null,
+    candidates,
+    missing,
+    patientName: patient.name,
+    insuranceLabel: patient.insurance,
+    preferredTimes: patient.preferredTimes,
+    recap,
+  };
 }
 
 /**
@@ -241,7 +358,24 @@ export async function reconcileConciergeJobs(): Promise<void> {
       where: { id: task.conciergeJobId! },
       include: { targets: { include: { results: { orderBy: { createdAt: "desc" } } } } },
     });
-    if (!session || session.targets.length === 0) continue; // not a live booking job
+    // A waiting booking task whose session has nothing to call will never progress on its own (the old
+    // route-to-concierge dead-end created exactly this: a draft session with no targets). Don't leave
+    // it stuck on "waiting" forever — surface it back to the operator with a clear next step. This also
+    // self-heals any such tasks already in the DB.
+    if (!session || session.targets.length === 0) {
+      const why = task.title.replace(/^(Booking|Book):\s*/, "");
+      await prisma.task.update({
+        where: { id: task.id },
+        data: {
+          state: "needs_you",
+          kind: "book",
+          conciergeJobId: null,
+          detail: "Klove couldn't reach an office to book this automatically. Add a phone or website, or pick a provider, to continue.",
+        },
+      });
+      await pushToOperator(task.householdId, "Action needed", `Klove couldn't start booking ${why} — tap to finish it.`, "actions", task.originChannel);
+      continue;
+    }
 
     const booked = session.targets.find((t) => t.status === "booked");
     const choosing = session.targets.find((t) => t.status === "awaiting_choice");
@@ -294,7 +428,19 @@ export async function reconcileConciergeJobs(): Promise<void> {
           relatedTaskId: task.id,
         },
       });
-      await pushToOperator(task.householdId, "Booked ✅", `${reason} is booked for ${whenText} with ${booked.officeName}.`, "today");
+      // Capture the office into the household's known-provider directory so the next booking can reuse
+      // it directly (this is how the directory "stores all past providers").
+      await upsertProvider({
+        householdId: task.householdId,
+        subjectUserId: task.subjectUserId,
+        name: booked.officeName,
+        phone: booked.phoneNumber,
+        website: booked.website,
+        specialty: classifySpecialty(reason),
+        source: "booking",
+        usedAt: new Date(),
+      }).catch((e) => console.error("provider capture failed", e));
+      await pushToOperator(task.householdId, "Booked ✅", `${reason} is booked for ${whenText} with ${booked.officeName}.`, "today", task.originChannel);
     } else if (choosing) {
       // The requested time wasn't available — the office offered alternates. Ask the operator to pick.
       const slots = fromJson<string[]>(choosing.offeredSlots, []);
@@ -319,7 +465,7 @@ export async function reconcileConciergeJobs(): Promise<void> {
           relatedTaskId: task.id,
         },
       });
-      await pushToOperator(task.householdId, "Choose a time", `${choosing.officeName} offered ${slots.length} alternate times for ${reason} — tap to pick.`, "actions");
+      await pushToOperator(task.householdId, "Choose a time", `${choosing.officeName} offered ${slots.length} alternate times for ${reason} — tap to pick.`, "actions", task.originChannel);
     } else if (awaitingVerification) {
       // An online scheduler sent a one-time code; the operator must enter it to finish booking.
       await prisma.task.update({
@@ -342,7 +488,7 @@ export async function reconcileConciergeJobs(): Promise<void> {
           relatedTaskId: task.id,
         },
       });
-      await pushToOperator(task.householdId, "Verification needed", `Enter the code ${awaitingVerification.officeName} sent to finish booking ${reason}.`, "actions");
+      await pushToOperator(task.householdId, "Verification needed", `Enter the code ${awaitingVerification.officeName} sent to finish booking ${reason}.`, "actions", task.originChannel);
     } else if (awaitingInfo) {
       // The office required information we didn't have; the operator must supply it.
       const missing = fromJson<string[]>(awaitingInfo.missingInfo, []);
@@ -367,14 +513,14 @@ export async function reconcileConciergeJobs(): Promise<void> {
           relatedTaskId: task.id,
         },
       });
-      await pushToOperator(task.householdId, "Info needed", `${awaitingInfo.officeName} needs more details to book ${reason} — tap to provide them.`, "actions");
+      await pushToOperator(task.householdId, "Info needed", `${awaitingInfo.officeName} needs more details to book ${reason} — tap to provide them.`, "actions", task.originChannel);
     } else if (terminal) {
       // Job finished without a booking (no answer, needs info, etc.) — surface it back to the operator.
       await prisma.task.update({
         where: { id: task.id },
         data: { state: "needs_you", detail: "Klove couldn't complete this booking automatically — tap to review." },
       });
-      await pushToOperator(task.householdId, "Action needed", `Klove couldn't finish booking ${reason} — tap to review.`, "actions");
+      await pushToOperator(task.householdId, "Action needed", `Klove couldn't finish booking ${reason} — tap to review.`, "actions", task.originChannel);
     }
    } catch (err) {
       // Isolate per-job failures so one malformed/orphaned booking can't block all the others.

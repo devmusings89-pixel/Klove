@@ -66,6 +66,10 @@ struct KloveTask: Decodable, Identifiable, Hashable {
     var isChooseTime: Bool { kind == "choose_time" }
     var isBooking: Bool { booking != nil }
 
+    /// A health-insight action (e.g. a borderline lab result). These offer "book a follow-up" or
+    /// "add as a question to an upcoming visit" rather than a concierge handoff.
+    var isInsight: Bool { kind == "review" }
+
     /// Title without the internal "Booking:/Hold:" prefix (status is shown separately on the card).
     var displayTitle: String {
         title.replacingOccurrences(of: #"^(Booking|Hold):\s*"#, with: "", options: .regularExpression)

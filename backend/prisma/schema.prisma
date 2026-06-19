@@ -61,6 +61,7 @@ model User {
   vitals            VitalSign[]
   immunizations     Immunization[]
   profiles          Profile[]
+  providers         Provider[]             @relation("ProviderSubject")
 
   // ---- Household / consent graph ----
   operatedHousehold Household?            @relation("HouseholdOperator")
@@ -435,6 +436,8 @@ model Session {
   // A Session doubles as a ConciergeJob in Klove. tier: ai (autonomous) | human (Tier-2 concierge).
   tier                  String       @default("ai")
   kind                  String       @default("booking") // booking | prep | follow_up
+  // Channel the booking was initiated from, so confirmations/updates route back to it. app | whatsapp.
+  originChannel         String?
   patientInfo           String // JSON: { name, dob, reason, insurance, preferredTimes, acceptableWindow }
   maxCalls              Int          @default(3)
   minutesCap            Int          @default(60)
@@ -505,6 +508,34 @@ model Household {
   tasks          Task[]
   messages       Message[]
   requests       Request[]
+  providers      Provider[]
+}
+
+// The household's known-provider directory. Holds every provider the family has used (captured after
+// a successful booking, backfilled from past Appointments) plus ones the operator searches/adds. The
+// booking pipeline resolves the right provider from here first (by member + specialty + recency) so it
+// already has the contact details — no dead-end "couldn't reach an office". A null subjectUserId means
+// the provider is shared household-wide; a set one scopes it to a specific member.
+model Provider {
+  id            String    @id @default(cuid())
+  household     Household @relation(fields: [householdId], references: [id])
+  householdId   String
+  subject       User?     @relation("ProviderSubject", fields: [subjectUserId], references: [id])
+  subjectUserId String?
+  name          String
+  phone         String?
+  website       String?
+  address       String?
+  specialty     String? // normalized specialty key when known, e.g. "dentist" (see SPECIALTY_KEYWORDS)
+  source        String    @default("manual") // booking | appointment | manual | places | search
+  npi           String? // National Provider Identifier when resolved from the NPI registry
+  acceptedCarriers String[] @default([]) // normalized insurance carrier keys this provider accepts (operator-tagged) — drives in-network status
+  lastUsedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([householdId])
+  @@index([subjectUserId])
 }
 
 // Roster row: which User belongs to which Household, and as what kind of member.
@@ -558,6 +589,8 @@ model Task {
   state           String    @default("needs_you") // needs_you | waiting | handled
   kind            String    @default("review") // review | book | prep | follow_up | reminder | choose_time
   dueAt           DateTime?
+  // Channel this task's booking was initiated from, so confirmations/needs-you prompts route back to it.
+  originChannel   String? // app | whatsapp
   sourceInsightId String? // -> HealthAlert.id that generated this task
   conciergeJobId  String? // -> Session.id when routed to the concierge engine
   options         String? // JSON array of offered alternate slots (when kind=choose_time)

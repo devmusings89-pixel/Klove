@@ -6,7 +6,7 @@
 import { prisma } from "../../db.js";
 import { runTool } from "../llm-tool.js";
 import { fromJson } from "../json.js";
-import { searchOffices } from "../lookup.js";
+import { resolveProvider, classifySpecialty } from "../providers.js";
 import { toE164 } from "../phone.js";
 import { BASE_SYSTEM, resolveMemberFromText, type AgentContext, type Subagent, type SubagentResult } from "./shared.js";
 
@@ -133,22 +133,33 @@ export const bookingAgent: Subagent = {
     const preferred = args.preferred_times?.trim();
     const forWhom = member.id === ctx.members[0]?.id ? "you" : member.name;
 
-    // Resolve the office: a user-provided phone wins; otherwise look it up via Places. We confirm a
-    // real, reachable place before dialing — never a fabricated hold.
+    // Resolve the office: a user-provided phone wins; otherwise resolve from the household's
+    // known-provider directory first (per member → household, by specialty/name), then Google Places.
+    // We confirm a real, reachable place before dialing — never a fabricated hold.
     const phone = toE164(args.phone ?? "") || extractPhone(ctx.text) || extractPhone(recent);
+    const specialty = classifySpecialty(provider) ?? classifySpecialty(reason);
     let office: { name: string; phone?: string; website?: string; address?: string };
     if (phone) {
       office = { name: provider || "the office", phone };
     } else {
       const location = await memberLocation(member.id, ctx.operatorUserId);
-      const base = provider || reason;
-      const query = location ? `${base} near ${location}` : base;
-      const matches = await searchOffices(query);
-      if (!matches.length) {
-        return { kind: "reply", text: `I couldn't find an office for "${base}". What's the office name, or a phone number to reach them?` };
+      const resolved = await resolveProvider({
+        householdId: ctx.householdId,
+        subjectUserId: member.id,
+        providerHint: provider,
+        specialty,
+        reason,
+        location: location ?? undefined,
+      });
+      const hit = resolved.provider
+        ? { name: resolved.provider.name, phone: resolved.provider.phone ?? undefined, website: resolved.provider.website ?? undefined, address: resolved.provider.address ?? undefined }
+        : resolved.fromPlaces
+          ? { name: resolved.fromPlaces.displayName, phone: resolved.fromPlaces.phone ?? undefined, website: resolved.fromPlaces.website ?? undefined, address: resolved.fromPlaces.address ?? undefined }
+          : null;
+      if (!hit) {
+        return { kind: "reply", text: `I couldn't find an office for "${provider || reason}". What's the office name, or a phone number to reach them?` };
       }
-      const top = matches[0];
-      office = { name: top.displayName, phone: top.phone ?? undefined, website: top.website ?? undefined, address: top.address ?? undefined };
+      office = hit;
     }
 
     // ---- Pre-call readiness: make sure we have what the office will ask for BEFORE we dial, so the
@@ -196,6 +207,7 @@ export const bookingAgent: Subagent = {
           insurance: chatCarrier || undefined,
           memberId: chatMemberId || undefined,
           dob: chatDob || undefined,
+          specialty: specialty || undefined,
         },
         subjectUserId: member.id,
         restatement: `All set — I'll call ${officeLabel}${where} to book ${reason} for ${forWhom}${preferred ? `, ${preferred}` : ""}, with ${forWhom === "you" ? "your" : "their"} details ready. Reply YES and I'll call now.`,

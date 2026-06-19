@@ -53,6 +53,18 @@ targets:
     dependencies:
       - package: stripe-ios
         product: StripePaymentSheet
+  KloveTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - KloveTests
+    dependencies:
+      - target: Klove
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.klove.client.tests
+        # The app target ships an explicit Info.plist; the test bundle can use a generated one.
+        GENERATE_INFOPLIST_FILE: YES
 packages:
   stripe-ios:
     url: https://github.com/stripe/stripe-ios

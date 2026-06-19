@@ -14,7 +14,7 @@ struct SessionLiveCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let s = session {
-                Label(SessionStatusCopy.title(s.status), systemImage: SessionStatusCopy.icon(s.status))
+                Label(statusTitle(s), systemImage: SessionStatusCopy.icon(s.status))
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(s.status == "failed" ? Theme.needsYou : Theme.ink)
 
@@ -93,6 +93,14 @@ struct SessionLiveCard: View {
 
     private func didFail(_ s: SessionState) -> Bool {
         s.status == "failed" || (s.status == "completed" && !s.targets.contains { $0.status == "booked" || $0.status == "transferred" })
+    }
+
+    /// Honest status: a session with no offices to contact yet isn't "starting the calls" — say so
+    /// plainly rather than implying outreach that isn't happening. (The backend self-heals genuinely
+    /// stuck jobs, but this keeps the card truthful in the brief gap before targets are attached.)
+    private func statusTitle(_ s: SessionState) -> String {
+        if s.targets.isEmpty && !s.isTerminal { return "Klove is getting this set up…" }
+        return SessionStatusCopy.title(s.status)
     }
 
     private func loadOnce() async {

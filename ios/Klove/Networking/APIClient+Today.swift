@@ -15,9 +15,16 @@ extension APIClient {
         try await patch("/tasks/\(id)", body: ["state": state])
     }
 
+    /// Borderline insight → convert into a booking task the user can act on.
     @discardableResult
-    func routeTaskToConcierge(_ id: String) async throws -> KloveTask {
-        try await post("/tasks/\(id)/route-to-concierge", body: [String: String]())
+    func bookFollowUp(_ id: String) async throws -> KloveTask {
+        try await post("/tasks/\(id)/book-follow-up", body: [String: String]())
+    }
+
+    /// Borderline insight → attach the question to an upcoming appointment; marks the insight handled.
+    @discardableResult
+    func attachQuestion(_ id: String, appointmentId: String, question: String? = nil) async throws -> EmptyResponse {
+        try await post("/tasks/\(id)/attach-question", body: AttachQuestionBody(appointmentId: appointmentId, question: question))
     }
 
     /// Snooze a task — hides it from Today for `days`, then it resurfaces.
@@ -56,6 +63,7 @@ extension APIClient {
 
 struct Preferences: Decodable { let pushEnabled: Bool; let reminderLeadHours: Int }
 private struct PreferencesBody: Encodable { let pushEnabled: Bool; let reminderLeadHours: Int }
+private struct AttachQuestionBody: Encodable { let appointmentId: String; let question: String? }
 
 extension APIClient {
     func getNotifications() async throws -> NotificationsResponse {

@@ -168,7 +168,7 @@ export async function askKlove(operatorUserId: string, text: string): Promise<As
   if (routed.result.kind === "reply") {
     return { kind: "answer", routedTo: "ai", answer: routed.result.text };
   }
-  const answer = await executeAction(operatorUserId, routed.result.action);
+  const answer = await executeAction(operatorUserId, routed.result.action, "app");
   const task = await prisma.task.findFirst({
     where: { subjectUserId: routed.result.action.subjectUserId, kind: { in: ["book", "choose_time"] } },
     orderBy: { createdAt: "desc" },
@@ -178,7 +178,7 @@ export async function askKlove(operatorUserId: string, text: string): Promise<As
 
 // ---- Action execution (the ONLY place state changes happen; re-checks consent + audits). ----
 
-async function executeAction(operatorUserId: string, action: ProposedAction): Promise<string> {
+async function executeAction(operatorUserId: string, action: ProposedAction, originChannel: "app" | "whatsapp" = "whatsapp"): Promise<string> {
   try {
     await assertCanOperate(operatorUserId, action.subjectUserId);
   } catch (err) {
@@ -200,6 +200,8 @@ async function executeAction(operatorUserId: string, action: ProposedAction): Pr
         insurance: str(action.args.insurance),
         memberId: str(action.args.memberId),
         dob: str(action.args.dob),
+        specialty: str(action.args.specialty),
+        originChannel,
       });
       const provider = str(action.args.provider);
       await audit(operatorUserId, action.subjectUserId, "booking_authorized", `WhatsApp booking: ${reason}`);

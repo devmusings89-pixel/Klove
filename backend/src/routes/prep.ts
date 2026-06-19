@@ -3,7 +3,7 @@ import { prisma } from "../db.js";
 import { requireUser, resolveSubject, isConsentError, type AccessLevel } from "../services/auth.js";
 import { ensureHousehold } from "../services/household.js";
 import { buildBrief, saveQuestions } from "../services/prep.js";
-import { bookAppointment } from "../services/concierge.js";
+import { bookAppointment, prepareBooking } from "../services/concierge.js";
 import { resolveOffice } from "../services/lookup.js";
 import { cancelAppointmentReminders } from "../services/reminders.js";
 import { audit } from "../services/audit.js";
@@ -77,10 +77,36 @@ export async function prepRoutes(app: FastifyInstance) {
     },
   );
 
-  // Book on the member's behalf (concierge). Live (Vapi/web/email) when LIVE_BOOKING is on and we can
-  // reach the office; otherwise the outcome is "needs_info" and a task is surfaced to finish it.
-  // Klove never fabricates a provisional appointment — status is "in_progress" or "needs_info".
-  app.post<{ Params: { id: string }; Body: { reason?: string; provider?: string; preferredDate?: string; preferredTimes?: string; phone?: string; website?: string; insurancePlanId?: string } }>(
+  // Step 1 of the in-app booking: resolve the provider (known-provider directory → Places) and the
+  // patient's details, and return a recap for the operator to CONFIRM. No calls are placed here.
+  // status "ready" → show the recap + confirm; "needs_provider" → show candidates to pick/add.
+  app.post<{ Params: { id: string }; Body: { reason?: string; provider?: string; specialty?: string; preferredDate?: string; preferredTimes?: string; phone?: string; website?: string; insurancePlanId?: string } }>(
+    "/members/:id/book/prepare",
+    { preHandler: requireUser },
+    async (req, reply) => {
+      const userId = await subjectOr403(req, reply, req.params.id, "operate");
+      if (!userId) return;
+      const householdId = await ensureHousehold(req.user!.id);
+      const reason = req.body?.reason?.trim() || "Appointment booking";
+      const plan = await prepareBooking(req.user!.id, userId, householdId, {
+        reason,
+        provider: req.body?.provider,
+        specialty: req.body?.specialty,
+        preferredDate: req.body?.preferredDate,
+        preferredTimes: req.body?.preferredTimes,
+        phone: req.body?.phone,
+        website: req.body?.website,
+        insurancePlanId: req.body?.insurancePlanId,
+      });
+      return reply.send(plan);
+    },
+  );
+
+  // Step 2: place the booking the operator confirmed (originated in the app). Live (Vapi/web/email)
+  // when LIVE_BOOKING is on and we can reach the office; otherwise the outcome is "needs_info" and a
+  // task is surfaced. Klove never fabricates a provisional appointment — status is "in_progress" or
+  // "needs_info". Confirmations/updates route back to the app (originChannel="app").
+  app.post<{ Params: { id: string }; Body: { reason?: string; provider?: string; specialty?: string; preferredDate?: string; preferredTimes?: string; phone?: string; website?: string; insurancePlanId?: string } }>(
     "/members/:id/book",
     { preHandler: requireUser },
     async (req, reply) => {
@@ -91,11 +117,13 @@ export async function prepRoutes(app: FastifyInstance) {
       const outcome = await bookAppointment(req.user!.id, userId, householdId, {
         reason,
         provider: req.body?.provider,
+        specialty: req.body?.specialty,
         preferredDate: req.body?.preferredDate,
         preferredTimes: req.body?.preferredTimes,
         phone: req.body?.phone,
         website: req.body?.website,
         insurancePlanId: req.body?.insurancePlanId,
+        originChannel: "app",
       });
       // Don't write the free-text visit reason (PHI) into the audit trail — the audit helper is
       // explicitly "who did what, to whom, no PHI bodies". Record only that a booking was requested.
