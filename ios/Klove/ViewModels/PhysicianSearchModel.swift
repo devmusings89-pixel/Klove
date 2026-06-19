@@ -18,7 +18,7 @@ final class PhysicianSearchModel {
     var results: [PhysicianResult] = []
     var resolvedSpecialty: String?
     var resolvedSubspecialty: String?
-    var recommendation: String?
+    var recommendation: PhysicianRecommendation?
     var disclaimer = ""
     var searching = false
     var loadingMore = false

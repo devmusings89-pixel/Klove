@@ -97,7 +97,7 @@ struct PhysicianSearchView: View {
 
     @ViewBuilder
     private var resultsSection: some View {
-        if let rec = model.recommendation, !rec.isEmpty {
+        if let rec = model.recommendation {
             recommendationCard(rec)
         }
         if let spec = model.resolvedSpecialty {
@@ -126,14 +126,39 @@ struct PhysicianSearchView: View {
     }
 
     @ViewBuilder
-    private func recommendationCard(_ rec: String) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+    private func recommendationCard(_ rec: PhysicianRecommendation) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             Label("Klove's recommendation", systemImage: "sparkles")
                 .font(.kloveLabel).tracking(Theme.Tracking.label).foregroundStyle(Theme.accent)
-            Text(rec).font(.kloveBody).foregroundStyle(Theme.ink)
+            Text(rec.summary).font(.kloveBody).foregroundStyle(Theme.ink)
+            ForEach(Array(rec.picks.enumerated()), id: \.offset) { idx, pick in
+                pickRow(idx + 1, pick)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .kloveCardSunken()
+    }
+
+    @ViewBuilder
+    private func pickRow(_ rank: Int, _ pick: RecommendationPick) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("\(rank).").font(.kloveBodyStrong).foregroundStyle(Theme.inkSecondary)
+                Text(pick.name).font(.kloveBodyStrong).foregroundStyle(Theme.ink)
+            }
+            Text(pick.why).font(.caption).foregroundStyle(Theme.inkSecondary)
+            if let evidence = pick.evidence, !evidence.isEmpty {
+                Text("“\(evidence)”").font(.caption.italic()).foregroundStyle(Theme.ink)
+                    .padding(.leading, Theme.Spacing.sm)
+                    .overlay(alignment: .leading) { Rectangle().fill(Theme.accent.opacity(0.4)).frame(width: 2) }
+            }
+            if let caution = pick.caution, !caution.isEmpty {
+                Label(caution, systemImage: "exclamationmark.circle").font(.caption2).foregroundStyle(Theme.inkSecondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Theme.Spacing.sm)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.sm))
     }
 
     @ViewBuilder

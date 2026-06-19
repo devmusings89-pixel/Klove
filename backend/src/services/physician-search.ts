@@ -8,7 +8,7 @@
 // quality, not clinical-outcomes data — surfaced in matchReasons and the disclaimer.
 
 import { prisma } from "../db.js";
-import { runTool, runText } from "./llm-tool.js";
+import { runTool } from "./llm-tool.js";
 import { classifySpecialty } from "./providers.js";
 import { searchPhysicians as npiSearch, type NpiPhysician } from "./npi.js";
 import { lookupPlaceRating, lookupPlaceReviews, geocode, searchSpecialists, type PlaceRating } from "./lookup.js";
@@ -34,12 +34,29 @@ export interface PhysicianResult {
   source: "npi" | "places" | "mock";
 }
 
+/** One ranked pick in Klove's recommendation. */
+export interface RecommendationPick {
+  name: string;
+  /** 1–2 sentences on why this provider fits the need. */
+  why: string;
+  /** A short supporting quote/fact from a review, when there is one. */
+  evidence: string | null;
+  /** A short caveat to set expectations, when warranted. */
+  caution: string | null;
+}
+
+/** Klove's structured recommendation, rendered natively (no raw markdown). */
+export interface Recommendation {
+  summary: string;
+  picks: RecommendationPick[];
+}
+
 export interface PhysicianSearchOutput {
   resolvedSpecialty: string | null;
   resolvedSubspecialty: string | null;
   disclaimer: string;
-  /** Klove's plain-language recommendation reading ratings + reviews against the stated need (first page only). */
-  recommendation: string | null;
+  /** Klove's recommendation reading ratings + reviews against the stated need (first page only). */
+  recommendation: Recommendation | null;
   radiusMiles: number | null;
   hasMore: boolean;
   nextOffset: number | null;
@@ -463,12 +480,48 @@ function empty(radiusMiles: number | null): PhysicianSearchOutput {
   };
 }
 
+const RECOMMEND_TOOL = {
+  name: "recommend_specialists",
+  description:
+    "Recommend the best 2–3 specialists for the patient's specific need, reading the ratings and review " +
+    "snippets provided. Be concise and professional. Cite concrete evidence; be honest when evidence is " +
+    "thin or absent — never invent experience that isn't in the data.",
+  input_schema: {
+    type: "object",
+    properties: {
+      summary: { type: "string", description: "One plain, professional sentence framing the overall recommendation." },
+      picks: {
+        type: "array",
+        description: "2–3 recommended providers, best first.",
+        items: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "The provider/clinic name exactly as given." },
+            why: { type: "string", description: "1–2 concise sentences on why they fit the need (mention rating/expertise)." },
+            evidence: { type: "string", description: "A short supporting quote or fact from a review, lightly trimmed; omit if none." },
+            caution: { type: "string", description: "A brief caveat to set expectations (e.g. 'no Botox evidence in reviews'); omit if none." },
+          },
+          required: ["name", "why"],
+        },
+      },
+    },
+    required: ["summary", "picks"],
+  } as Record<string, unknown>,
+};
+
+interface RawPick {
+  name?: string;
+  why?: string;
+  evidence?: string;
+  caution?: string;
+}
+
 /**
- * Read each top candidate's Google reviews and write a short recommendation matching the stated need
- * (e.g. "Botox experience for migraine" → who has review evidence of it). Returns null when no LLM is
- * configured or there's nothing to read, so the UI simply omits the section.
+ * Read each top candidate's Google reviews and produce a STRUCTURED recommendation matching the stated
+ * need (e.g. "Botox experience for migraine" → who has review evidence of it). Returns null when no LLM
+ * is configured or there's nothing to read, so the UI omits the section.
  */
-async function recommend(condition: string, top: PhysicianResult[]): Promise<string | null> {
+async function recommend(condition: string, top: PhysicianResult[]): Promise<Recommendation | null> {
   if (top.length === 0) return null;
   // Pull review snippets for the candidates with a Google listing (bounded by RECOMMEND_CAP upstream).
   const withReviews = await Promise.all(
@@ -487,15 +540,19 @@ async function recommend(condition: string, top: PhysicianResult[]): Promise<str
     })
     .join("\n\n");
 
-  const text = await runText({
+  const out = await runTool<{ summary?: string; picks?: RawPick[] }>({
     system:
-      "You are Klove, a careful care navigator. Given a patient's specific need and a ranked list of " +
-      "specialists with Google ratings and review snippets, recommend the 2–3 best matches FOR THAT NEED. " +
-      "Cite concrete evidence (a rating, or a review that mentions the need). Be honest when the evidence " +
-      "is thin or absent — never invent experience that isn't in the data. 4–6 sentences, no preamble, " +
-      "refer to doctors by name.",
+      "You are Klove, a careful care navigator. Recommend the best matches for the patient's need from the " +
+      "given specialists, reading their ratings and reviews. Professional, concrete, and honest about gaps.",
     content: `Patient need: "${condition}"\n\nCandidates:\n${dossier}`,
-    maxTokens: 500,
+    tool: RECOMMEND_TOOL,
+    maxTokens: 700,
   });
-  return text?.trim() || null;
+  if (!out?.summary || !out.picks?.length) return null;
+  return {
+    summary: out.summary.trim(),
+    picks: out.picks
+      .filter((p) => p.name && p.why)
+      .map((p) => ({ name: p.name!.trim(), why: p.why!.trim(), evidence: p.evidence?.trim() || null, caution: p.caution?.trim() || null })),
+  };
 }

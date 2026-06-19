@@ -86,12 +86,26 @@ struct PhysicianResult: Decodable, Identifiable, Hashable {
     var id: String { npi ?? "\(name)|\(address ?? "")" }
 }
 
+/// One ranked pick in Klove's recommendation.
+struct RecommendationPick: Decodable, Hashable {
+    let name: String
+    let why: String
+    let evidence: String?
+    let caution: String?
+}
+
+/// Klove's structured recommendation, rendered natively.
+struct PhysicianRecommendation: Decodable, Hashable {
+    let summary: String
+    let picks: [RecommendationPick]
+}
+
 /// The full response: resolved specialty, a recommendation, paging info, and ranked results.
 struct PhysicianSearchResponse: Decodable {
     let resolvedSpecialty: String?
     let resolvedSubspecialty: String?
     let disclaimer: String
-    let recommendation: String?
+    let recommendation: PhysicianRecommendation?
     let radiusMiles: Double?
     let hasMore: Bool
     let nextOffset: Int?
