@@ -156,8 +156,18 @@ struct APIClient {
     /// Fallback identity: backend resolves the user from this header when there's no bearer token.
     private var userEmail: String { UserDefaults.standard.string(forKey: AppStorageKey.userEmail) ?? "" }
 
+    /// Resolve a request path (which may include a query string, e.g. "/x?y=z") against the base URL.
+    /// `appendingPathComponent` percent-encodes "?" and "&" into the path and breaks query strings, so
+    /// parse with URLComponents and resolve relative to the base instead.
+    private func url(for path: String) -> URL {
+        if let comps = URLComponents(string: path), let resolved = comps.url(relativeTo: baseURL)?.absoluteURL {
+            return resolved
+        }
+        return baseURL.appendingPathComponent(path)
+    }
+
     func get<R: Decodable>(_ path: String) async throws -> R {
-        var req = URLRequest(url: baseURL.appendingPathComponent(path))
+        var req = URLRequest(url: url(for: path))
         req.httpMethod = "GET"
         return try await send(req)
     }
@@ -172,7 +182,7 @@ struct APIClient {
 
     @discardableResult
     func delete<R: Decodable>(_ path: String) async throws -> R {
-        var req = URLRequest(url: baseURL.appendingPathComponent(path))
+        var req = URLRequest(url: url(for: path))
         req.httpMethod = "DELETE"
         return try await send(req)
     }
@@ -182,7 +192,7 @@ struct APIClient {
     }
 
     private func sendBody<B: Encodable, R: Decodable>(_ path: String, method: String, body: B) async throws -> R {
-        var req = URLRequest(url: baseURL.appendingPathComponent(path))
+        var req = URLRequest(url: url(for: path))
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONEncoder().encode(body)
