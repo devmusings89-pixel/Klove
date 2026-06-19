@@ -9,7 +9,10 @@ enum Config {
         let override = infoPlistString("API_BASE_URL")
         return URL(string: override.isEmpty ? defaultApiBaseURL : override)!
     }
-    private static let defaultApiBaseURL = "https://agents.klovehealth.com"
+    // NOTE: the custom domain agents.klovehealth.com currently serves a broken TLS cert (Fly reports
+    // "Issued" but the edge serves no chain → iOS ATS *and* curl both fail). Point at the Fly-native
+    // domain, which has a valid *.fly.dev cert. Switch back once the custom-domain cert is re-provisioned.
+    private static let defaultApiBaseURL = "https://klove-backend.fly.dev"
 
     /// Stripe publishable key (safe to ship in the client). Use your test key `pk_test_…`.
     /// When empty, the app falls back to the backend's mock-payment endpoint.
