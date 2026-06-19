@@ -110,5 +110,6 @@ struct PhysicianSearchResponse: Decodable {
     let radiusMiles: Double?
     let hasMore: Bool
     let nextOffset: Int?
+    let memberInsurance: [String]
     let results: [PhysicianResult]
 }

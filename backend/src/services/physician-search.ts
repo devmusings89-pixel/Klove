@@ -13,8 +13,11 @@ import { classifySpecialty } from "./providers.js";
 import { searchPhysicians as npiSearch, type NpiPhysician } from "./npi.js";
 import { lookupPlaceRating, lookupPlaceReviews, geocode, searchSpecialists, type PlaceRating } from "./lookup.js";
 import { enabled } from "../config.js";
+import { normalizeCarrier, networkStatus, type NetworkStatus } from "./network.js";
+import { confirmNetworkByText } from "./insurance.js";
 
-export type NetworkStatus = "in_network" | "out_of_network" | "unconfirmed" | "unknown";
+// Re-export so existing importers (routes, physician-detail) keep working after the network.ts extraction.
+export { normalizeCarrier, networkStatus, type NetworkStatus };
 
 export interface PhysicianResult {
   npi: string | null;
@@ -60,6 +63,8 @@ export interface PhysicianSearchOutput {
   radiusMiles: number | null;
   hasMore: boolean;
   nextOffset: number | null;
+  /** The member's own carriers on file, so the UI can label badges "Accepts Aetna" / "Check Aetna". */
+  memberInsurance: string[];
   results: PhysicianResult[];
 }
 
@@ -144,22 +149,6 @@ export async function resolveCondition(condition: string): Promise<ResolvedCondi
 
 // ---- In-network carrier heuristic ----
 
-/** Collapse carrier names/aliases to a normalized key so "Anthem BCBS" and "Blue Cross" match. */
-export function normalizeCarrier(name: string | null | undefined): string | null {
-  const n = (name ?? "").toLowerCase().trim();
-  if (!n) return null;
-  if (/blue cross|blue shield|bcbs|anthem|carefirst|premera|regence/.test(n)) return "bcbs";
-  if (/unitedhealth|united health|\buhc\b|\bunited\b|optum/.test(n)) return "unitedhealth";
-  if (/aetna/.test(n)) return "aetna";
-  if (/cigna/.test(n)) return "cigna";
-  if (/humana/.test(n)) return "humana";
-  if (/kaiser/.test(n)) return "kaiser";
-  if (/medicare/.test(n)) return "medicare";
-  if (/medicaid/.test(n)) return "medicaid";
-  // Unknown carrier: keep a compacted token so exact-string matches still work.
-  return n.replace(/[^a-z0-9]+/g, "");
-}
-
 /** Normalized insurance carriers on file for a member (from their InsurancePlan cards). */
 export async function memberCarriers(subjectUserId: string): Promise<string[]> {
   const plans = await prisma.insurancePlan.findMany({
@@ -177,13 +166,6 @@ export async function memberCarrierNames(subjectUserId: string): Promise<string[
     select: { carrier: true },
   });
   return Array.from(new Set(plans.map((p) => p.carrier?.trim()).filter((c): c is string => Boolean(c))));
-}
-
-/** Decide in-network status from a provider's accepted carriers vs the member's carriers. */
-export function networkStatus(accepted: string[], member: string[]): NetworkStatus {
-  if (member.length === 0) return "unknown"; // no insurance on file to check against
-  if (accepted.length === 0) return "unconfirmed"; // we don't know what this provider takes
-  return accepted.some((a) => member.includes(a)) ? "in_network" : "out_of_network";
 }
 
 // Allied-health credentials that aren't physicians — excluded from a "doctors" search. Blank credentials
@@ -378,6 +360,7 @@ export interface PhysicianSearchInput {
 }
 
 const RECOMMEND_CAP = 8; // how many top candidates we read reviews for + hand the recommender
+const INSURANCE_CHECK_CAP = 8; // how many website-bearing results we fast-check for in-network status per search
 
 /**
  * Search for the best specialists for a condition: resolves the specialty, pages the NPI registry,
@@ -461,8 +444,29 @@ export async function searchPhysicians(input: PhysicianSearchInput): Promise<Phy
     return { ...result, matchReasons: reasons, networkStatus: networkStatus(accepted, member) };
   });
 
-  // Recommendation only on the first page (reads reviews → LLM), so it reflects the top set once per search.
-  const recommendation = offset === 0 ? await recommend(input.condition, results.slice(0, RECOMMEND_CAP)) : null;
+  // Confirm insurance in the LIST (not just the detail view): for results that still read "unconfirmed"
+  // and have a website, do a FAST, LLM-free text match for the member's carrier. Runs concurrently with
+  // the recommendation so it doesn't add to wall-clock; matches upgrade to "Accepts <carrier>", the rest
+  // stay "unconfirmed" → the UI shows "Check coverage".
+  const insurancePass =
+    member.length > 0
+      ? Promise.all(
+          results
+            .filter((r) => r.networkStatus === "unconfirmed" && r.website)
+            .slice(0, INSURANCE_CHECK_CAP)
+            .map(async (r) => {
+              const status = await confirmNetworkByText(r.website!, member);
+              if (status === "in_network") r.networkStatus = status;
+            }),
+        )
+      : Promise.resolve([]);
+
+  const [recommendation, memberInsurance] = await Promise.all([
+    // Recommendation only on the first page (reads reviews → LLM), so it reflects the top set once per search.
+    offset === 0 ? recommend(input.condition, results.slice(0, RECOMMEND_CAP)) : Promise.resolve(null),
+    memberCarrierNames(input.subjectUserId),
+    insurancePass,
+  ]);
 
   return {
     resolvedSpecialty: resolved.specialty,
@@ -472,6 +476,7 @@ export async function searchPhysicians(input: PhysicianSearchInput): Promise<Phy
     radiusMiles,
     hasMore,
     nextOffset: hasMore ? offset + limit : null,
+    memberInsurance,
     results,
   };
 }
@@ -485,6 +490,7 @@ function empty(radiusMiles: number | null): PhysicianSearchOutput {
     radiusMiles,
     hasMore: false,
     nextOffset: null,
+    memberInsurance: [],
     results: [],
   };
 }

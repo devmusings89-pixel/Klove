@@ -190,7 +190,7 @@ struct PhysicianSearchView: View {
                     }
                 }
                 Spacer()
-                NetworkBadge(status: p.networkStatus)
+                NetworkBadge(status: p.networkStatus, carrier: model.memberInsurance.first)
             }
 
             HStack(spacing: Theme.Spacing.md) {
@@ -271,7 +271,7 @@ struct PhysicianDetailView: View {
                     Label(String(format: "%.1f mi", mi), systemImage: "mappin.and.ellipse")
                         .font(.caption).foregroundStyle(Theme.inkSecondary)
                 }
-                NetworkBadge(status: networkStatus)
+                NetworkBadge(status: networkStatus, carrier: model.memberInsurance.first)
             }
         }
     }
@@ -449,14 +449,26 @@ struct PhysicianDetailView: View {
 /// system, so it uses semantic green/red with quiet greys for the unknowns.
 struct NetworkBadge: View {
     let status: NetworkStatus
+    /// The member's insurance carrier name, so a confirmed badge can read "Accepts Aetna".
+    var carrier: String? = nil
 
     var body: some View {
-        Text(status.label.uppercased())
+        Text(label.uppercased())
             .font(.system(size: 10, weight: .bold))
             .tracking(0.8)
+            .multilineTextAlignment(.trailing)
             .padding(.horizontal, 8).padding(.vertical, 4)
             .background(tint.opacity(0.14), in: Capsule())
             .foregroundStyle(tint)
+    }
+
+    private var label: String {
+        switch status {
+        case .inNetwork: return carrier.map { "Accepts \($0)" } ?? "In-network"
+        case .outOfNetwork: return carrier.map { "\($0) out-of-network" } ?? "Out-of-network"
+        case .unconfirmed: return "Check coverage"
+        case .unknown: return "Add insurance"
+        }
     }
 
     private var tint: Color {

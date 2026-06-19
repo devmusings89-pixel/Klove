@@ -19,6 +19,7 @@ final class PhysicianSearchModel {
     var resolvedSpecialty: String?
     var resolvedSubspecialty: String?
     var recommendation: PhysicianRecommendation?
+    var memberInsurance: [String] = []
     var disclaimer = ""
     var searching = false
     var loadingMore = false
@@ -54,6 +55,7 @@ final class PhysicianSearchModel {
             resolvedSpecialty = res.resolvedSpecialty
             resolvedSubspecialty = res.resolvedSubspecialty
             recommendation = res.recommendation
+            memberInsurance = res.memberInsurance
             disclaimer = res.disclaimer
             nextOffset = res.nextOffset
             hasSearched = true
