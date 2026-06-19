@@ -100,6 +100,23 @@ export async function saveQuestions(userId: string, appointmentId: string, quest
   });
 }
 
+/**
+ * Add one question to an appointment's prep list (used when a borderline health insight is routed to
+ * "ask at an upcoming visit"). Materializes the current question set first so the auto-suggested
+ * prep questions aren't lost, then appends — de-duplicated. Returns false if the appointment isn't
+ * the member's. The question then surfaces in the Discussion → Questions list like any other.
+ */
+export async function appendQuestion(userId: string, appointmentId: string, question: string): Promise<boolean> {
+  const appt = await prisma.appointment.findFirst({ where: { id: appointmentId, userId } });
+  if (!appt) return false;
+  const trimmed = question.trim();
+  if (!trimmed) return true;
+  const existing = (await buildBrief(userId, appointmentId)).questions;
+  if (existing.some((q) => q.trim().toLowerCase() === trimmed.toLowerCase())) return true;
+  await saveQuestions(userId, appointmentId, [...existing, trimmed]);
+  return true;
+}
+
 function safeParseQuestions(notes: string): string[] | null {
   try {
     const parsed = JSON.parse(notes) as { questions?: string[] };

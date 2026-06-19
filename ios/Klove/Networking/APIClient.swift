@@ -207,6 +207,9 @@ struct APIClient {
             throw AppError.server(status: -1, message: "No HTTP response")
         }
         guard (200..<300).contains(http.statusCode) else {
+            // A 401 means our Supabase session is gone/expired — clear it so the app routes back to
+            // sign-in instead of every screen showing a misleading "Couldn't reach Klove".
+            if http.statusCode == 401 { await AuthService.shared.sessionExpired() }
             throw AppError.server(status: http.statusCode, message: String(data: data, encoding: .utf8) ?? "")
         }
         if R.self == EmptyResponse.self { return EmptyResponse() as! R }

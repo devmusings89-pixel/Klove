@@ -40,6 +40,16 @@ final class AuthService: NSObject {
 
     var email: String { UserDefaults.standard.string(forKey: AppStorageKey.userEmail) ?? "" }
 
+    /// The backend rejected our credentials (HTTP 401) — the Supabase session is gone or expired.
+    /// Clear the stale token and flip to signed-out so the app returns to the sign-in screen instead
+    /// of looping on failed requests (which previously surfaced as a misleading "Couldn't reach Klove").
+    @MainActor
+    func sessionExpired() {
+        guard isAuthenticated || authToken != nil else { return } // already signed out — no-op
+        KeychainStore.remove(AppStorageKey.authToken)
+        isAuthenticated = false
+    }
+
     /// Configure the Apple request with the requested scopes + a hashed nonce (Supabase verifies it).
     func configure(_ request: ASAuthorizationAppleIDRequest) {
         let nonce = Self.randomNonce()

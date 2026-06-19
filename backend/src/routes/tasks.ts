@@ -3,6 +3,7 @@ import { prisma } from "../db.js";
 import { requireUser, resolveSubject, isConsentError } from "../services/auth.js";
 import { accessibleSubjects } from "../services/household.js";
 import { placeBookingCallback } from "../services/orchestrator.js";
+import { appendQuestion } from "../services/prep.js";
 import { fromJson } from "../services/json.js";
 
 const STATES = new Set(["needs_you", "waiting", "handled", "snoozed"]);
@@ -162,9 +163,10 @@ export async function taskRoutes(app: FastifyInstance) {
         return reply.code(404).send({ error: "appointment_not_available" });
       }
       const question = (req.body?.question?.trim() || task.title).trim();
-      const line = `Question to raise: ${question}`;
-      const notes = appt.notes ? `${appt.notes}\n${line}` : line;
-      await prisma.appointment.update({ where: { id: appt.id }, data: { notes } });
+      // Store via the prep question list (notes holds {questions:[…]} JSON) so it shows up in the
+      // appointment's Discussion → Questions, not as a corrupting free-text append.
+      const ok = await appendQuestion(task.subjectUserId, appt.id, question);
+      if (!ok) return reply.code(404).send({ error: "appointment_not_available" });
       await prisma.task.update({ where: { id: task.id }, data: { state: "handled" } });
       await prisma.message.create({
         data: {
