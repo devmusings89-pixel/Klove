@@ -139,6 +139,59 @@ export async function searchOffices(query: string, limit = 3): Promise<OfficeMat
   }
 }
 
+export interface PlaceRating {
+  rating: number | null; // 1.0–5.0
+  userRatingCount: number | null;
+  phone: string | null;
+  website: string | null;
+  address: string | null;
+}
+
+/**
+ * Look up an office's Google rating + review count (plus contact) by name/address — the quality proxy
+ * for physician search ranking. Returns null when Places is off (no fabricated ratings) so ranking
+ * falls back to credentials alone. The mock physician seed carries no rating, keeping tests deterministic.
+ */
+export async function lookupPlaceRating(officeName: string, address?: string | null): Promise<PlaceRating | null> {
+  if (!enabled.googlePlaces()) return null;
+  const query = [officeName, address].filter(Boolean).join(" ").trim();
+  if (!query) return null;
+  try {
+    const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": config.googlePlacesApiKey,
+        "X-Goog-FieldMask":
+          "places.rating,places.userRatingCount,places.internationalPhoneNumber,places.websiteUri,places.formattedAddress",
+      },
+      body: JSON.stringify({ textQuery: query, maxResultCount: 1 }),
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      places?: {
+        rating?: number;
+        userRatingCount?: number;
+        internationalPhoneNumber?: string;
+        websiteUri?: string;
+        formattedAddress?: string;
+      }[];
+    };
+    const p = json.places?.[0];
+    if (!p) return null;
+    return {
+      rating: typeof p.rating === "number" ? p.rating : null,
+      userRatingCount: typeof p.userRatingCount === "number" ? p.userRatingCount : null,
+      phone: p.internationalPhoneNumber ? p.internationalPhoneNumber.replace(/[^\d+]/g, "") : null,
+      website: p.websiteUri ?? null,
+      address: p.formattedAddress ?? null,
+    };
+  } catch (err) {
+    console.error("lookupPlaceRating failed", err);
+    return null;
+  }
+}
+
 /**
  * Find an office's website (for the web channel) by name via Google Places.
  * Returns null when not configured or not found.

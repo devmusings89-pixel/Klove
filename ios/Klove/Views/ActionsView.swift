@@ -7,6 +7,7 @@ struct ActionsView: View {
     @State private var tasks: [KloveTask] = []
     @State private var loading = true
     @State private var showBook = false
+    @State private var showFindSpecialist = false
     @State private var segment = 0   // 0 = Active, 1 = Done
     private let api = APIClient()
 
@@ -39,14 +40,25 @@ struct ActionsView: View {
         .navigationDestination(for: KloveTask.self) { TaskDetailView(task: $0, onChange: { Task { await load() } }) }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button { showBook = true } label: { Image(systemName: "plus") }
-                    .accessibilityLabel("Book an appointment")
+                Menu {
+                    Button { showBook = true } label: { Label("Book an appointment", systemImage: "calendar.badge.plus") }
+                    Button { showFindSpecialist = true } label: { Label("Find a specialist", systemImage: "stethoscope") }
+                } label: { Image(systemName: "plus") }
+                    .accessibilityLabel("New action")
             }
         }
         .sheet(isPresented: $showBook) {
             if let m = store.selectedMember ?? store.actionableMembers.first {
                 BookAppointmentView(memberId: m.userId, memberName: m.name, allowMemberChange: true,
                                     onBooked: { Task { await load() } })
+                    .environment(store)
+            } else {
+                Text("Add a family member first.").padding()
+            }
+        }
+        .sheet(isPresented: $showFindSpecialist) {
+            if let m = store.selectedMember ?? store.actionableMembers.first {
+                PhysicianSearchView(memberId: m.userId, memberName: m.name, allowMemberChange: true)
                     .environment(store)
             } else {
                 Text("Add a family member first.").padding()

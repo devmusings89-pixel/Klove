@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { requireUser } from "../services/auth.js";
 import { ensureHousehold } from "../services/household.js";
 import { listProviders, searchProviders, upsertProvider } from "../services/providers.js";
+import { normalizeCarrier } from "../services/physician-search.js";
 
 /**
  * The household's known-provider directory — list past providers, search (directory + Google Places),
@@ -23,24 +24,39 @@ export async function providerRoutes(app: FastifyInstance) {
   });
 
   // Add (or refresh) a provider in the directory. memberId scopes it to one member; omit for shared.
-  app.post<{ Body: { name?: string; phone?: string; website?: string; address?: string; specialty?: string; memberId?: string } }>(
-    "/providers",
-    { preHandler: requireUser },
-    async (req, reply) => {
-      const name = req.body?.name?.trim();
-      if (!name) return reply.code(400).send({ error: "name required" });
-      const householdId = await ensureHousehold(req.user!.id);
-      const provider = await upsertProvider({
-        householdId,
-        subjectUserId: req.body?.memberId?.trim() || null,
-        name,
-        phone: req.body?.phone?.trim() || null,
-        website: req.body?.website?.trim() || null,
-        address: req.body?.address?.trim() || null,
-        specialty: req.body?.specialty?.trim() || null,
-        source: "manual",
-      });
-      return reply.code(201).send(provider);
-    },
-  );
+  app.post<{
+    Body: {
+      name?: string;
+      phone?: string;
+      website?: string;
+      address?: string;
+      specialty?: string;
+      memberId?: string;
+      npi?: string;
+      // Insurance carriers this provider accepts (raw carrier names; normalized server-side). Lets a
+      // physician-search result be saved with the in-network tags that drive its network badge.
+      acceptedCarriers?: string[];
+      source?: string;
+    };
+  }>("/providers", { preHandler: requireUser }, async (req, reply) => {
+    const name = req.body?.name?.trim();
+    if (!name) return reply.code(400).send({ error: "name required" });
+    const householdId = await ensureHousehold(req.user!.id);
+    const carriers = Array.isArray(req.body?.acceptedCarriers)
+      ? Array.from(new Set(req.body!.acceptedCarriers.map(normalizeCarrier).filter((c): c is string => Boolean(c))))
+      : undefined;
+    const provider = await upsertProvider({
+      householdId,
+      subjectUserId: req.body?.memberId?.trim() || null,
+      name,
+      phone: req.body?.phone?.trim() || null,
+      website: req.body?.website?.trim() || null,
+      address: req.body?.address?.trim() || null,
+      specialty: req.body?.specialty?.trim() || null,
+      npi: req.body?.npi?.trim() || null,
+      acceptedCarriers: carriers,
+      source: req.body?.source?.trim() || "manual",
+    });
+    return reply.code(201).send(provider);
+  });
 }

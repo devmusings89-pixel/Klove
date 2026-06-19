@@ -15,9 +15,10 @@ extension APIClient {
     }
 
     /// Add (or refresh) a provider in the directory. `memberId` scopes it to a member; omit for shared.
+    /// `npi` / `source` let a physician-search result be saved with its identity and provenance.
     @discardableResult
-    func addProvider(name: String, phone: String? = nil, website: String? = nil, address: String? = nil, specialty: String? = nil, memberId: String? = nil) async throws -> DirectoryProvider {
-        try await post("/providers", body: AddProviderBody(name: name, phone: phone, website: website, address: address, specialty: specialty, memberId: memberId))
+    func addProvider(name: String, phone: String? = nil, website: String? = nil, address: String? = nil, specialty: String? = nil, memberId: String? = nil, npi: String? = nil, source: String? = nil) async throws -> DirectoryProvider {
+        try await post("/providers", body: AddProviderBody(name: name, phone: phone, website: website, address: address, specialty: specialty, memberId: memberId, npi: npi, source: source))
     }
 }
 
@@ -46,4 +47,6 @@ private struct AddProviderBody: Encodable {
     let address: String?
     let specialty: String?
     let memberId: String?
+    let npi: String?
+    let source: String?
 }
