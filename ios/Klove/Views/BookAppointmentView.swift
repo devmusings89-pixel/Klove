@@ -28,13 +28,25 @@ struct BookAppointmentView: View {
     @State private var officeMatch: OfficeMatch?
     @State private var lookingUp = false
     @State private var lookupTask: Task<Void, Never>?
+    // The exact phone/website we auto-filled from a matched office, so we can tell an untouched
+    // auto-fill (safe to replace when the office changes) from a value the user typed themselves.
+    @State private var autofilledPhone: String?
+    @State private var autofilledWebsite: String?
     @State private var showAddInsurance = false
     private let api = APIClient()
 
-    init(memberId: String, memberName: String, allowMemberChange: Bool = false, initialReason: String = "", onBooked: @escaping () -> Void = {}) {
+    init(memberId: String, memberName: String, allowMemberChange: Bool = false, initialReason: String = "",
+         initialProvider: String = "", initialPhone: String = "", initialWebsite: String = "",
+         onBooked: @escaping () -> Void = {}) {
         _memberId = State(initialValue: memberId)
         _memberName = State(initialValue: memberName)
         _reason = State(initialValue: initialReason)
+        _provider = State(initialValue: initialProvider)
+        _phone = State(initialValue: initialPhone)
+        _website = State(initialValue: initialWebsite)
+        // Treat prefilled contact as auto-filled so the office-lookup logic can still refine it.
+        _autofilledPhone = State(initialValue: initialPhone.isEmpty ? nil : initialPhone)
+        _autofilledWebsite = State(initialValue: initialWebsite.isEmpty ? nil : initialWebsite)
         self.allowMemberChange = allowMemberChange
         self.onBooked = onBooked
     }
@@ -259,20 +271,19 @@ struct BookAppointmentView: View {
                         .font(.caption).foregroundStyle(Theme.inkSecondary)
                 }
 
-                if o.isProvisional {
-                    Text("Klove placed a provisional hold\(o.startsAt != nil ? " for \(o.whenDisplay)" : ""). It isn't confirmed with the office yet — Klove will confirm and update you in Today.")
+                if o.isNeedsInfo {
+                    // Klove reached no office — be honest: nothing is booked. No "Klove is on it" here.
+                    Text("Klove couldn't reach an office to book this yet, so nothing is scheduled. It's saved to Actions — add a phone or website, or pick a provider, to finish.")
                         .font(.caption).foregroundStyle(Theme.inkSecondary).multilineTextAlignment(.center).padding(.top, 4)
-                } else if o.isConfirmed {
-                    Text("\(o.whenDisplay)\(o.confirmation.map { " · Confirmation \($0)" } ?? "")")
-                        .font(.caption).foregroundStyle(Theme.inkSecondary)
-                    Text("You'll find it in Today and on \(memberName)'s timeline.")
-                        .font(.caption).foregroundStyle(Theme.inkSecondary).padding(.top, 4)
-                } else {
+                } else if let sid = o.sessionId {
+                    // A live booking job is in flight — watch it reach the office. The confirmation (or a
+                    // demo label, for a simulated run) appears in the live card and in Today once it lands.
                     Text("Watch Klove reach the office below — you'll also find this in Today & Actions.")
                         .font(.caption).foregroundStyle(Theme.inkSecondary).multilineTextAlignment(.center).padding(.top, 4)
-                    if let sid = o.sessionId {
-                        SessionLiveCard(sessionId: sid).padding(.top, 8)
-                    }
+                    SessionLiveCard(sessionId: sid).padding(.top, 8)
+                } else {
+                    Text("Klove is working on this — you'll find updates in Today & Actions.")
+                        .font(.caption).foregroundStyle(Theme.inkSecondary).multilineTextAlignment(.center).padding(.top, 4)
                 }
             }
             .padding(24)
@@ -282,16 +293,13 @@ struct BookAppointmentView: View {
     }
 
     private func confTitle(_ o: BookingOutcome) -> String {
-        if o.isProvisional { return "Provisional hold placed" }
-        return o.isConfirmed ? "Done — it's booked" : "Klove is on it"
+        o.isNeedsInfo ? "Couldn't reach the office yet" : "Klove is on it"
     }
     private func confIcon(_ o: BookingOutcome) -> String {
-        if o.isProvisional { return "calendar.badge.clock" }
-        return o.isConfirmed ? "checkmark.seal.fill" : "phone.arrow.up.right.fill"
+        o.isNeedsInfo ? "exclamationmark.circle" : "phone.arrow.up.right.fill"
     }
     private func confTint(_ o: BookingOutcome) -> Color {
-        if o.isProvisional { return Theme.needsYou }
-        return o.isConfirmed ? Theme.handled : Theme.accent
+        o.isNeedsInfo ? Theme.needsYou : Theme.accent
     }
 
     /// Step 1: resolve the provider + details and show a recap to confirm. No calls are placed.
@@ -342,6 +350,12 @@ struct BookAppointmentView: View {
         lookupTask?.cancel()
         let query = raw.trimmingCharacters(in: .whitespaces)
         officeMatch = nil
+        // Drop a previous office's auto-filled contact info so a newly matched office can repopulate
+        // it — but only if the user hasn't since edited it by hand.
+        if let p = autofilledPhone, phone == p { phone = "" }
+        if let w = autofilledWebsite, website == w { website = "" }
+        autofilledPhone = nil
+        autofilledWebsite = nil
         guard query.count >= 3 else { lookingUp = false; return }
         lookingUp = true
         lookupTask = Task {
@@ -351,6 +365,18 @@ struct BookAppointmentView: View {
             if Task.isCancelled { return }
             officeMatch = match
             lookingUp = false
+            // Fill the office phone/website from the match so Klove reaches the exact office —
+            // without overwriting anything the user typed themselves.
+            if let match {
+                if phone.trimmingCharacters(in: .whitespaces).isEmpty, let p = match.phone, !p.isEmpty {
+                    phone = p
+                    autofilledPhone = p
+                }
+                if website.trimmingCharacters(in: .whitespaces).isEmpty, let w = match.website, !w.isEmpty {
+                    website = w
+                    autofilledWebsite = w
+                }
+            }
         }
     }
 

@@ -132,19 +132,33 @@ struct PhysicianSearchView: View {
                 .font(.kloveLabel).tracking(Theme.Tracking.label).foregroundStyle(Theme.accent)
             Text(rec.summary).font(.kloveBody).foregroundStyle(Theme.ink)
             ForEach(Array(rec.picks.enumerated()), id: \.offset) { idx, pick in
-                pickRow(idx + 1, pick)
+                if let match = matchedResult(pick.name) {
+                    NavigationLink(value: match) { pickRow(idx + 1, pick, tappable: true) }.buttonStyle(.plain)
+                } else {
+                    pickRow(idx + 1, pick, tappable: false)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .kloveCardSunken()
     }
 
+    /// Match a recommendation pick (by name) back to a result so the row can deep-link to its detail.
+    private func matchedResult(_ name: String) -> PhysicianResult? {
+        let key = normalizedName(name)
+        return model.results.first { normalizedName($0.name) == key }
+            ?? model.results.first { let n = normalizedName($0.name); return n.contains(key) || key.contains(n) }
+    }
+    private func normalizedName(_ s: String) -> String { s.lowercased().filter { $0.isLetter || $0.isNumber } }
+
     @ViewBuilder
-    private func pickRow(_ rank: Int, _ pick: RecommendationPick) -> some View {
+    private func pickRow(_ rank: Int, _ pick: RecommendationPick, tappable: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text("\(rank).").font(.kloveBodyStrong).foregroundStyle(Theme.inkSecondary)
                 Text(pick.name).font(.kloveBodyStrong).foregroundStyle(Theme.ink)
+                Spacer()
+                if tappable { Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(Theme.inkSecondary) }
             }
             Text(pick.why).font(.caption).foregroundStyle(Theme.inkSecondary)
             if let evidence = pick.evidence, !evidence.isEmpty {
@@ -232,7 +246,10 @@ struct PhysicianDetailView: View {
         .task { await load() }
         .sheet(isPresented: $showBook) {
             BookAppointmentView(memberId: model.memberId, memberName: model.memberName,
-                                initialReason: model.resolvedSpecialty ?? result.specialty)
+                                initialReason: model.resolvedSpecialty ?? result.specialty,
+                                initialProvider: result.name,
+                                initialPhone: result.phone ?? "",
+                                initialWebsite: result.website ?? "")
                 .environment(store)
         }
     }
