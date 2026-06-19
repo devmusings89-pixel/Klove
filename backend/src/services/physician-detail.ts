@@ -4,8 +4,8 @@
 // insurance to upgrade the network badge from "unconfirmed" to a real in/out-of-network call.
 
 import { runTool } from "./llm-tool.js";
-import { lookupPlaceReviews } from "./lookup.js";
-import { memberCarriers, networkStatus, normalizeCarrier, type NetworkStatus } from "./physician-search.js";
+import { lookupPlaceReviews, lookupPlaceRating } from "./lookup.js";
+import { memberCarriers, memberCarrierNames, networkStatus, normalizeCarrier, type NetworkStatus } from "./physician-search.js";
 
 export interface PhysicianDetail {
   reviews: string[];
@@ -13,7 +13,24 @@ export interface PhysicianDetail {
   networkStatus: NetworkStatus;
   insuranceNote: string | null;
   insuranceSourceUrl: string | null;
+  /** The member's own carriers on file (so the UI can always say "your plan: Aetna"). */
+  memberInsurance: string[];
 }
+
+// Common URL paths where practices publish accepted insurance, tried in addition to scanning homepage links.
+const INSURANCE_PATHS = [
+  "/insurance",
+  "/insurances",
+  "/accepted-insurance",
+  "/insurance-accepted",
+  "/billing",
+  "/billing-insurance",
+  "/financial-information",
+  "/patients",
+  "/for-patients",
+  "/new-patients",
+  "/patient-information",
+];
 
 export interface PhysicianDetailInput {
   subjectUserId: string;
@@ -36,14 +53,19 @@ function stripHtml(html: string): string {
     .slice(0, 12000);
 }
 
-/** Fetch a URL's text content, or null on any failure/timeout. */
-async function fetchText(url: string): Promise<string | null> {
+/** Fetch a URL's text content, or null on any failure/timeout. Retries http→https once. */
+async function fetchText(url: string, allowHttpsRetry = true): Promise<string | null> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 6000);
     const res = await fetch(url, {
       signal: controller.signal,
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; KloveBot/1.0; +https://klove.app)" },
+      headers: {
+        // A real browser UA — some sites block obvious bots.
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        Accept: "text/html",
+      },
       redirect: "follow",
     });
     clearTimeout(timer);
@@ -51,6 +73,7 @@ async function fetchText(url: string): Promise<string | null> {
     const html = await res.text();
     return html.slice(0, 400_000); // cap raw HTML before stripping
   } catch {
+    if (allowHttpsRetry && url.startsWith("http://")) return fetchText(url.replace(/^http:/, "https:"), false);
     return null;
   }
 }
@@ -101,30 +124,55 @@ async function scrapeInsurance(website: string): Promise<{ carriers: string[]; n
   const homeHtml = await fetchText(website);
   if (!homeHtml) return { carriers: [], note: "Couldn't reach the website.", sourceUrl: null };
 
-  // Prefer a dedicated insurance/billing page when the homepage links to one.
-  const subUrl = findInsuranceLink(homeHtml, website);
-  const subHtml = subUrl && subUrl !== website ? await fetchText(subUrl) : null;
-  const text = [stripHtml(homeHtml), subHtml ? stripHtml(subHtml) : ""].filter(Boolean).join("\n\n").slice(0, 16000);
+  let origin = website;
+  try {
+    origin = new URL(website).origin;
+  } catch {
+    /* keep website as-is */
+  }
+
+  // Candidate insurance pages: the one linked from the homepage, plus a few common paths. Fetch up to 3.
+  const candidates: string[] = [];
+  const linked = findInsuranceLink(homeHtml, website);
+  if (linked && linked !== website) candidates.push(linked);
+  for (const path of INSURANCE_PATHS) {
+    const u = `${origin}${path}`;
+    if (!candidates.includes(u)) candidates.push(u);
+  }
+  const subPages = (await Promise.all(candidates.slice(0, 6).map((u) => fetchText(u).then((h) => (h ? { u, h } : null)))))
+    .filter((x): x is { u: string; h: string } => x !== null)
+    .slice(0, 3);
+
+  const sourceUrl = subPages[0]?.u ?? website;
+  const text = [stripHtml(homeHtml), ...subPages.map((s) => stripHtml(s.h))].filter(Boolean).join("\n\n").slice(0, 18000);
   if (!text) return { carriers: [], note: "No readable content on the website.", sourceUrl: website };
 
   const extracted = await runTool<{ carriers?: string[]; note?: string }>({
     system: "You read a medical practice's website text and report only the insurance it explicitly accepts.",
     content: `Website text:\n${text}`,
     tool: INSURANCE_TOOL,
-    maxTokens: 400,
+    maxTokens: 500,
   });
-  if (!extracted) return { carriers: [], note: "Insurance couldn't be read automatically.", sourceUrl: subUrl ?? website };
+  if (!extracted) return { carriers: [], note: "Insurance couldn't be read automatically.", sourceUrl };
 
   const carriers = Array.from(new Set((extracted.carriers ?? []).map((c) => c.trim()).filter(Boolean)));
-  return { carriers, note: extracted.note?.trim() || null, sourceUrl: subUrl ?? website };
+  return { carriers, note: extracted.note?.trim() || null, sourceUrl };
 }
 
 /** Reviews + scraped-insurance network status for one provider's detail view. */
 export async function physicianDetails(input: PhysicianDetailInput): Promise<PhysicianDetail> {
-  const [reviews, insurance, member] = await Promise.all([
+  // NPI individuals carry no website — try to resolve one from their Google listing so we can still scrape.
+  let website = input.website?.trim() || null;
+  if (!website) {
+    const place = await lookupPlaceRating(input.name, input.address ?? null);
+    website = place?.website ?? null;
+  }
+
+  const [reviews, insurance, member, memberNames] = await Promise.all([
     lookupPlaceReviews(input.name, input.address ?? null, 5),
-    input.website ? scrapeInsurance(input.website) : Promise.resolve({ carriers: [] as string[], note: null, sourceUrl: null }),
+    website ? scrapeInsurance(website) : Promise.resolve({ carriers: [] as string[], note: "No website on file to check.", sourceUrl: null }),
     memberCarriers(input.subjectUserId),
+    memberCarrierNames(input.subjectUserId),
   ]);
 
   const normalized = Array.from(new Set(insurance.carriers.map(normalizeCarrier).filter((c): c is string => Boolean(c))));
@@ -134,5 +182,6 @@ export async function physicianDetails(input: PhysicianDetailInput): Promise<Phy
     networkStatus: networkStatus(normalized, member),
     insuranceNote: insurance.note,
     insuranceSourceUrl: insurance.sourceUrl,
+    memberInsurance: memberNames,
   };
 }

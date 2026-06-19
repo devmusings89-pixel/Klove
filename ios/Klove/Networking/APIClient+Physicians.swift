@@ -38,6 +38,7 @@ struct PhysicianDetail: Decodable {
     let networkStatus: NetworkStatus
     let insuranceNote: String?
     let insuranceSourceUrl: String?
+    let memberInsurance: [String]
 }
 
 /// In-network status for a physician relative to the member's insurance.

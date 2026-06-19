@@ -8,6 +8,7 @@ struct PhysicianSearchView: View {
 
     @Environment(HouseholdStore.self) private var store
     @Environment(\.dismiss) private var dismiss
+    private let caps = CapabilityStore.shared
     @State private var model: PhysicianSearchModel
 
     init(memberId: String, memberName: String, allowMemberChange: Bool = false) {
@@ -19,6 +20,9 @@ struct PhysicianSearchView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
+                    if !caps.physicianSearchLive {
+                        SimulatedBadge(note: "Results are sample specialists, not the live NPI registry.")
+                    }
                     searchControls
                     if model.searching {
                         ProgressView("Finding specialists…").frame(maxWidth: .infinity).padding(.top, 40)
@@ -300,17 +304,33 @@ struct PhysicianDetailView: View {
     @ViewBuilder
     private var insuranceSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            sectionLabel("Insurance accepted")
+            sectionLabel("Insurance")
+
+            // Always show the member's own plan so the section is never empty.
+            if let d = detail, !d.memberInsurance.isEmpty {
+                Label("Your plan: \(d.memberInsurance.joined(separator: ", "))", systemImage: "creditcard")
+                    .font(.caption).foregroundStyle(Theme.ink)
+            } else if !loading {
+                Label("No insurance on file — add a card in your profile to check coverage.", systemImage: "creditcard")
+                    .font(.caption).foregroundStyle(Theme.inkSecondary)
+            }
+
+            Divider()
+
             if loading {
                 Label("Checking their website…", systemImage: "magnifyingglass").font(.caption).foregroundStyle(Theme.inkSecondary)
             } else if let d = detail, !d.acceptedCarriers.isEmpty {
-                Text(d.acceptedCarriers.joined(separator: " · ")).font(.caption).foregroundStyle(Theme.ink)
+                Text("Accepts: \(d.acceptedCarriers.joined(separator: " · "))").font(.caption).foregroundStyle(Theme.ink)
                 networkVerdict
                 if let src = d.insuranceSourceUrl, let url = URL(string: src) {
                     Link("Source: their website", destination: url).font(.caption2).tint(Theme.accent)
                 }
             } else {
-                Text(detail?.insuranceNote ?? "We couldn't confirm accepted insurance from their website. Call the office to verify your coverage.")
+                // No carriers scraped — be honest and tell the member what Klove will do.
+                if let note = detail?.insuranceNote, !note.isEmpty {
+                    Text(note).font(.caption2).foregroundStyle(Theme.inkSecondary)
+                }
+                Label(verifyMessage, systemImage: "checkmark.shield")
                     .font(.caption).foregroundStyle(Theme.inkSecondary)
             }
         }
@@ -318,11 +338,18 @@ struct PhysicianDetailView: View {
         .kloveCard()
     }
 
+    private var verifyMessage: String {
+        if let d = detail, let first = d.memberInsurance.first {
+            return "Klove will confirm your \(first) coverage with this office before booking."
+        }
+        return "Klove will confirm coverage with this office before booking."
+    }
+
     @ViewBuilder
     private var networkVerdict: some View {
         switch networkStatus {
         case .inNetwork: Label("Likely takes your insurance", systemImage: "checkmark.seal.fill").font(.caption.weight(.semibold)).foregroundStyle(.green)
-        case .outOfNetwork: Label("May be out-of-network for your plan", systemImage: "exclamationmark.triangle").font(.caption.weight(.semibold)).foregroundStyle(.red)
+        case .outOfNetwork: Label("Your plan may be out-of-network — Klove will confirm with the office", systemImage: "exclamationmark.triangle").font(.caption.weight(.semibold)).foregroundStyle(.orange)
         default: Text("Confirm your specific plan with the office.").font(.caption2).foregroundStyle(Theme.inkSecondary)
         }
     }

@@ -170,6 +170,15 @@ export async function memberCarriers(subjectUserId: string): Promise<string[]> {
   return Array.from(new Set(keys));
 }
 
+/** Human-readable carrier names on file for a member (for display, e.g. "Aetna"). */
+export async function memberCarrierNames(subjectUserId: string): Promise<string[]> {
+  const plans = await prisma.insurancePlan.findMany({
+    where: { profile: { userId: subjectUserId } },
+    select: { carrier: true },
+  });
+  return Array.from(new Set(plans.map((p) => p.carrier?.trim()).filter((c): c is string => Boolean(c))));
+}
+
 /** Decide in-network status from a provider's accepted carriers vs the member's carriers. */
 export function networkStatus(accepted: string[], member: string[]): NetworkStatus {
   if (member.length === 0) return "unknown"; // no insurance on file to check against
