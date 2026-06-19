@@ -9,7 +9,6 @@ struct PhysicianSearchView: View {
     @Environment(HouseholdStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var model: PhysicianSearchModel
-    @State private var bookFor: PhysicianResult?
 
     init(memberId: String, memberName: String, allowMemberChange: Bool = false) {
         _model = State(initialValue: PhysicianSearchModel(memberId: memberId, memberName: memberName))
@@ -39,10 +38,8 @@ struct PhysicianSearchView: View {
             .alert("Search failed", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
                 Button("OK", role: .cancel) {}
             } message: { Text(model.errorMessage ?? "") }
-            .sheet(item: $bookFor) { p in
-                BookAppointmentView(memberId: model.memberId, memberName: model.memberName,
-                                    initialReason: model.resolvedSpecialty ?? p.specialty)
-                    .environment(store)
+            .navigationDestination(for: PhysicianResult.self) { p in
+                PhysicianDetailView(result: p, model: model).environment(store)
             }
         }
     }
@@ -111,7 +108,9 @@ struct PhysicianSearchView: View {
             Text("No specialists found. Try describing the condition differently, widening the radius, or changing the location.")
                 .font(.kloveBody).foregroundStyle(Theme.inkSecondary).kloveCard()
         } else {
-            ForEach(model.results) { p in resultCard(p) }
+            ForEach(model.results) { p in
+                NavigationLink(value: p) { resultCard(p) }.buttonStyle(.plain)
+            }
             if model.hasMore {
                 Button { Task { await model.loadMore() } } label: {
                     if model.loadingMore { ProgressView() } else { Label("Load more", systemImage: "arrow.down.circle") }
@@ -162,23 +161,167 @@ struct PhysicianSearchView: View {
                         .font(.caption).foregroundStyle(Theme.inkSecondary)
                 }
             }
-            if let addr = p.address, !addr.isEmpty {
-                Text(addr).font(.caption2).foregroundStyle(Theme.inkSecondary)
-            }
-
-            HStack(spacing: Theme.Spacing.md) {
-                Button { bookFor = p } label: { Label("Book", systemImage: "calendar.badge.plus") }
-                    .font(.caption.weight(.semibold)).tint(Theme.accent)
-                Button { Task { await model.save(p) } } label: {
-                    Label(model.savedIds.contains(p.id) ? "Saved" : "Save", systemImage: model.savedIds.contains(p.id) ? "checkmark" : "bookmark")
+            HStack(alignment: .bottom) {
+                if let addr = p.address, !addr.isEmpty {
+                    Text(addr).font(.caption2).foregroundStyle(Theme.inkSecondary)
                 }
-                .font(.caption.weight(.semibold)).tint(Theme.accent)
-                .disabled(model.savedIds.contains(p.id))
+                Spacer()
+                Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(Theme.inkSecondary)
             }
-            .padding(.top, 2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .kloveCard()
+    }
+}
+
+/// Full detail for a tapped specialist: everything we know, plus live-loaded review snippets and the
+/// insurance scraped from their website (which upgrades the network badge), and the primary booking CTA.
+struct PhysicianDetailView: View {
+    let result: PhysicianResult
+    let model: PhysicianSearchModel
+
+    @Environment(HouseholdStore.self) private var store
+    @State private var detail: PhysicianDetail?
+    @State private var loading = true
+    @State private var showBook = false
+    private let api = APIClient()
+
+    private var networkStatus: NetworkStatus { detail?.networkStatus ?? result.networkStatus }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+                header
+                bookCTA
+                contactSection
+                insuranceSection
+                reviewsSection
+                saveButton
+            }
+            .padding(Theme.Spacing.xl)
+        }
+        .background(Theme.background.ignoresSafeArea())
+        .navigationTitle(result.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .tint(Theme.accent)
+        .task { await load() }
+        .sheet(isPresented: $showBook) {
+            BookAppointmentView(memberId: model.memberId, memberName: model.memberName,
+                                initialReason: model.resolvedSpecialty ?? result.specialty)
+                .environment(store)
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            Text(result.name).font(.kloveSerifHeading).foregroundStyle(Theme.ink)
+            if let tax = result.taxonomyDesc { Text(tax).font(.kloveBody).foregroundStyle(Theme.inkSecondary) }
+            HStack(spacing: Theme.Spacing.md) {
+                if let rating = result.rating {
+                    Text(String(format: "%.1f★ · %d reviews", rating, result.reviewCount ?? 0))
+                        .font(.caption.weight(.medium)).foregroundStyle(Theme.ink)
+                }
+                if let mi = result.distanceMiles {
+                    Label(String(format: "%.1f mi", mi), systemImage: "mappin.and.ellipse")
+                        .font(.caption).foregroundStyle(Theme.inkSecondary)
+                }
+                NetworkBadge(status: networkStatus)
+            }
+        }
+    }
+
+    private var bookCTA: some View {
+        Button { showBook = true } label: {
+            Label("Klove Book an appointment", systemImage: "calendar.badge.plus")
+        }
+        .buttonStyle(KlovePrimaryButtonStyle())
+    }
+
+    @ViewBuilder
+    private var contactSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            sectionLabel("Contact")
+            if let addr = result.address, !addr.isEmpty {
+                Link(destination: mapsURL(addr)) { rowLabel(addr, "mappin.and.ellipse") }
+            }
+            if let phone = result.phone, !phone.isEmpty, let tel = URL(string: "tel:\(phone.filter { $0.isNumber || $0 == "+" })") {
+                Link(destination: tel) { rowLabel(phone, "phone") }
+            }
+            if let web = result.website, !web.isEmpty, let url = URL(string: web) {
+                Link(destination: url) { rowLabel(web, "globe").lineLimit(1) }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .kloveCard()
+    }
+
+    @ViewBuilder
+    private var insuranceSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            sectionLabel("Insurance accepted")
+            if loading {
+                Label("Checking their website…", systemImage: "magnifyingglass").font(.caption).foregroundStyle(Theme.inkSecondary)
+            } else if let d = detail, !d.acceptedCarriers.isEmpty {
+                Text(d.acceptedCarriers.joined(separator: " · ")).font(.caption).foregroundStyle(Theme.ink)
+                networkVerdict
+                if let src = d.insuranceSourceUrl, let url = URL(string: src) {
+                    Link("Source: their website", destination: url).font(.caption2).tint(Theme.accent)
+                }
+            } else {
+                Text(detail?.insuranceNote ?? "We couldn't confirm accepted insurance from their website. Call the office to verify your coverage.")
+                    .font(.caption).foregroundStyle(Theme.inkSecondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .kloveCard()
+    }
+
+    @ViewBuilder
+    private var networkVerdict: some View {
+        switch networkStatus {
+        case .inNetwork: Label("Likely takes your insurance", systemImage: "checkmark.seal.fill").font(.caption.weight(.semibold)).foregroundStyle(.green)
+        case .outOfNetwork: Label("May be out-of-network for your plan", systemImage: "exclamationmark.triangle").font(.caption.weight(.semibold)).foregroundStyle(.red)
+        default: Text("Confirm your specific plan with the office.").font(.caption2).foregroundStyle(Theme.inkSecondary)
+        }
+    }
+
+    @ViewBuilder
+    private var reviewsSection: some View {
+        if let d = detail, !d.reviews.isEmpty {
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                sectionLabel("What patients say")
+                ForEach(Array(d.reviews.prefix(4).enumerated()), id: \.offset) { _, r in
+                    Text("“\(r)”").font(.caption).foregroundStyle(Theme.inkSecondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .kloveCard()
+        }
+    }
+
+    private var saveButton: some View {
+        Button { Task { await model.save(result) } } label: {
+            Label(model.savedIds.contains(result.id) ? "Saved to your directory" : "Save to directory",
+                  systemImage: model.savedIds.contains(result.id) ? "checkmark" : "bookmark")
+        }
+        .tint(Theme.accent)
+        .disabled(model.savedIds.contains(result.id))
+    }
+
+    private func sectionLabel(_ t: String) -> some View {
+        Text(t.uppercased()).font(.kloveLabel).tracking(Theme.Tracking.label).foregroundStyle(Theme.inkSecondary)
+    }
+    private func rowLabel(_ t: String, _ icon: String) -> some View {
+        Label(t, systemImage: icon).font(.caption).foregroundStyle(Theme.ink)
+    }
+    private func mapsURL(_ address: String) -> URL {
+        URL(string: "http://maps.apple.com/?q=\(address.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")")!
+    }
+
+    private func load() async {
+        loading = true
+        defer { loading = false }
+        detail = try? await api.physicianDetails(name: result.name, address: result.address, website: result.website, memberId: model.memberId)
     }
 }
 

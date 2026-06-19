@@ -17,6 +17,27 @@ extension APIClient {
         let query = comps.percentEncodedQuery ?? ""
         return try await get("/physicians/search?\(query)")
     }
+
+    /// Detail view data for one provider: review snippets + accepted insurance scraped from their website,
+    /// matched against the member's coverage for a confirmed network status.
+    func physicianDetails(name: String, address: String?, website: String?, memberId: String? = nil) async throws -> PhysicianDetail {
+        var items = [URLQueryItem(name: "name", value: name)]
+        if let address, !address.isEmpty { items.append(URLQueryItem(name: "address", value: address)) }
+        if let website, !website.isEmpty { items.append(URLQueryItem(name: "website", value: website)) }
+        if let memberId { items.append(URLQueryItem(name: "memberId", value: memberId)) }
+        var comps = URLComponents()
+        comps.queryItems = items
+        return try await get("/physicians/details?\(comps.percentEncodedQuery ?? "")")
+    }
+}
+
+/// Detail payload from GET /physicians/details.
+struct PhysicianDetail: Decodable {
+    let reviews: [String]
+    let acceptedCarriers: [String]
+    let networkStatus: NetworkStatus
+    let insuranceNote: String?
+    let insuranceSourceUrl: String?
 }
 
 /// In-network status for a physician relative to the member's insurance.

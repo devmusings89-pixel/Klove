@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { requireUser } from "../services/auth.js";
 import { ensureHousehold } from "../services/household.js";
 import { searchPhysicians } from "../services/physician-search.js";
+import { physicianDetails } from "../services/physician-detail.js";
 
 /**
  * Physician search — "find the best expert for my condition." Resolves the condition to a specialty,
@@ -31,4 +32,23 @@ export async function physicianRoutes(app: FastifyInstance) {
       radiusMiles: Number.isFinite(radius) && radius > 0 ? radius : undefined,
     });
   });
+
+  // Detail view: review snippets + best-effort "insurance accepted" scraped from the provider's website,
+  // matched against the member's insurance for a confirmed network status.
+  app.get<{ Querystring: { name?: string; address?: string; website?: string; memberId?: string } }>(
+    "/physicians/details",
+    { preHandler: requireUser },
+    async (req, reply) => {
+      const name = (req.query?.name ?? "").trim();
+      if (!name) return reply.code(400).send({ error: "name required" });
+      await ensureHousehold(req.user!.id);
+      const subjectUserId = req.query?.memberId?.trim() || req.user!.id;
+      return physicianDetails({
+        subjectUserId,
+        name,
+        address: req.query?.address?.trim() || undefined,
+        website: req.query?.website?.trim() || undefined,
+      });
+    },
+  );
 }
