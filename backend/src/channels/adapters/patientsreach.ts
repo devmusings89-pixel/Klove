@@ -15,7 +15,7 @@ import type { SchedulerAdapter } from "./types.js";
  * the confirm button (dry run) so tests never create a real appointment.
  */
 
-const MAX_WEEKS = 26;
+const MAX_WEEKS = 30; // ~7 months out — covers through year-end; the scan stops early when the office's calendar runs out
 const SUBMIT = process.env.SVASA_SUBMIT === "1";
 
 export const patientsreachAdapter: SchedulerAdapter = {
