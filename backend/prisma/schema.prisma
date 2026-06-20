@@ -468,6 +468,7 @@ model CallTarget {
   attempts            Int          @default(0) // outbound call attempts placed (for bounded auto-retry on no-answer)
   nextAttemptAt       DateTime? // when a retry_wait target becomes eligible to re-dial (backoff)
   callbackHours       String? // the office's stated callback/open hours captured from a no-answer call (e.g. "Mon–Fri 9am–5pm")
+  preferredChannel    String? // the office's remembered preferred booking channel — tried first by the router (web | voice | messaging)
   offeredSlots        String? // JSON array of slot strings collected in gather mode
   chosenSlot          String? // the slot the patient picked
   missingInfo         String? // JSON array of info the office required that we couldn't provide
@@ -533,6 +534,9 @@ model Provider {
   source        String    @default("manual") // booking | appointment | manual | places | search
   npi           String? // National Provider Identifier when resolved from the NPI registry
   acceptedCarriers String[] @default([]) // normalized insurance carrier keys this provider accepts (operator-tagged) — drives in-network status
+  // The booking channel that last SUCCEEDED for this office (web | voice | messaging). Learned after a
+  // successful booking and tried first next time, so we use each office's preferred method.
+  preferredBookingMethod String?
   lastUsedAt    DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt

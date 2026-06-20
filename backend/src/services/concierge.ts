@@ -183,6 +183,15 @@ async function liveBooking(operatorUserId: string, subjectUserId: string, househ
   // Full patient details (name, DOB, insurance) so the AI can introduce the patient on the call.
   const patient = await buildPatientInfo(subjectUserId, operatorUserId, input, reason);
 
+  // Reuse this office's preferred booking method if we've learned one from a past successful booking,
+  // so the router tries it first (web/voice/messaging) before falling back.
+  const preferredChannel = provider
+    ? (await prisma.provider.findFirst({
+        where: { householdId, name: { equals: provider, mode: "insensitive" } },
+        select: { preferredBookingMethod: true },
+      }))?.preferredBookingMethod ?? null
+    : null;
+
   const session = await prisma.session.create({
     data: {
       userId: subjectUserId,
@@ -197,6 +206,7 @@ async function liveBooking(operatorUserId: string, subjectUserId: string, househ
           phoneNumber: phone,
           website,
           channelHints: email ? toJson({ email }) : null,
+          preferredChannel,
           order: 0,
           status: "pending",
         },
@@ -469,6 +479,8 @@ export async function reconcileConciergeJobs(): Promise<void> {
         website: booked.website,
         specialty: classifySpecialty(reason),
         source: "booking",
+        // Remember the channel that actually booked, so next time we try it first.
+        preferredBookingMethod: booked.channel ?? undefined,
         usedAt: new Date(),
       }).catch((e) => console.error("provider capture failed", e));
       await pushToOperator(task.householdId, "Booked ✅", `${reason} is booked for ${whenText} with ${booked.officeName}.`, "today", task.originChannel);

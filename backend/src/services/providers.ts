@@ -145,6 +145,8 @@ export interface UpsertProviderInput {
   npi?: string | null;
   /** Normalized insurance carrier keys this provider accepts (drives in-network status). Replaces when set. */
   acceptedCarriers?: string[];
+  /** The booking channel that succeeded (web | voice | messaging) — remembered + tried first next time. */
+  preferredBookingMethod?: string | null;
   /** When set, bumps lastUsedAt to the max of the existing value and this. */
   usedAt?: Date | null;
 }
@@ -170,6 +172,7 @@ export async function upsertProvider(input: UpsertProviderInput): Promise<Provid
     source: input.source ?? existing?.source ?? "manual",
     npi: input.npi ?? existing?.npi ?? null,
     acceptedCarriers: input.acceptedCarriers ?? existing?.acceptedCarriers ?? [],
+    preferredBookingMethod: input.preferredBookingMethod ?? existing?.preferredBookingMethod ?? null,
     lastUsedAt,
   };
   if (existing) return prisma.provider.update({ where: { id: existing.id }, data });

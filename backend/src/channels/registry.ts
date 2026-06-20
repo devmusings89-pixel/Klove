@@ -23,6 +23,14 @@ export function getChannel(type: ChannelType): BookingChannel | undefined {
   return CHANNELS.find((c) => c.type === type);
 }
 
+/** Move the office's remembered preferred channel to the front, keeping the rest in priority order. */
+export function prioritizeChannels<T extends { channel: { type: ChannelType } }>(supported: T[], preferred?: string | null): T[] {
+  if (!preferred) return supported;
+  const pref = supported.filter((d) => d.channel.type === preferred);
+  if (!pref.length) return supported;
+  return [...pref, ...supported.filter((d) => d.channel.type !== preferred)];
+}
+
 const PRIORITY: Record<ChannelType, number> = {
   web: 0,
   voice: 1,
@@ -53,9 +61,13 @@ export async function routeAndAttempt(ctx: BookingContext): Promise<RouteResult>
     .filter((d) => d.det.supported)
     .sort((a, b) => PRIORITY[a.channel.type] - PRIORITY[b.channel.type] || b.det.confidence - a.det.confidence);
 
+  // Use the office's remembered preferred method first (learned from a past successful booking), then
+  // fall through the rest in the default priority order.
+  const ordered = prioritizeChannels(supported, ctx.target.preferredChannel);
+
   const tried: ChannelType[] = [];
   let lastFailed: { channel: ChannelType; result: ChannelResult } | undefined;
-  for (const { channel } of supported) {
+  for (const { channel } of ordered) {
     tried.push(channel.type);
     let attempt;
     try {
