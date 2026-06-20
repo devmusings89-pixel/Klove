@@ -210,11 +210,16 @@ struct MessageView: View {
     }
 
     private func bubble(_ fill: Color, _ fg: Color) -> some View {
-        Text(message.text)
+        Text(markdown(message.text))
             .font(.kloveBody).foregroundStyle(fg)
             .padding(.horizontal, 16).padding(.vertical, 12)
             .background(fill, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// Render the agent's markdown (bold, bullets) instead of showing literal ** and - characters.
+    private func markdown(_ s: String) -> AttributedString {
+        (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(s)
     }
 
     // MARK: Cards
