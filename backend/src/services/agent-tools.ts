@@ -101,14 +101,17 @@ const searchPhysiciansTool: ReadTool = {
       .map((r, i) => {
         const rating = r.rating != null ? `${r.rating}★(${r.reviewCount ?? 0})` : "no rating";
         const dist = r.distanceMiles != null ? `, ${r.distanceMiles}mi` : "";
-        return `${i + 1}. ${r.name} — ${r.taxonomyDesc ?? r.specialty}; ${rating}${dist}; ${r.networkStatus}; phone:${r.phone ?? "n/a"}`;
+        // Individuals (NPI / a credential like MD/DO) are bookable doctors; the rest are practices/clinics.
+        const kind = r.npi || r.credential ? "DOCTOR" : "practice";
+        return `${i + 1}. [${kind}] ${r.name} — ${r.taxonomyDesc ?? r.specialty}; ${rating}${dist}; ${r.networkStatus}; phone:${r.phone ?? "n/a"}`;
       })
       .join("\n");
     const summary =
       `Specialty: ${out.resolvedSpecialty ?? "unclear"}${out.resolvedSubspecialty ? ` / ${out.resolvedSubspecialty}` : ""}. ` +
       `Member insurance on file: ${out.memberInsurance.join(", ") || "none"}.\n` +
       (out.results.length ? `Candidates (shown to the user as cards):\n${lines}` : "No specialists found.") +
-      `\nRecommend the best 1–2 for the user's need and offer to book — propose book_appointment with the chosen provider's exact name + phone.`;
+      `\nRecommend a SPECIFIC physician marked [DOCTOR] (e.g. "James H Petrin MD"), not a [practice], and align with the user on that one doctor before booking. ` +
+      `A [practice] has no named physician — only book it if the user explicitly agrees to let the office assign a doctor.`;
     return { summary, card };
   },
 };
@@ -187,7 +190,7 @@ const bookAppointmentTool: ActTool = {
       type: "object",
       properties: {
         reason: { type: "string", description: "Visit type/specialty as a short noun phrase (e.g. 'dermatologist', 'migraine consult')." },
-        provider: { type: "string", description: "The exact provider/office name chosen." },
+        provider: { type: "string", description: "The chosen provider — prefer a SPECIFIC physician's name (e.g. 'Dr. James Petrin'), not just a clinic, unless the user agreed to let a practice assign one." },
         phone: { type: "string", description: "Office phone, if known." },
         website: { type: "string", description: "Office booking website, if known." },
         preferred_times: { type: "string", description: "Timing the USER stated or their remembered preference (e.g. 'weekday mornings'). Do NOT invent one — if you don't know their availability, ask first and omit this." },
