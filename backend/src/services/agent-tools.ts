@@ -190,7 +190,7 @@ const bookAppointmentTool: ActTool = {
         provider: { type: "string", description: "The exact provider/office name chosen." },
         phone: { type: "string", description: "Office phone, if known." },
         website: { type: "string", description: "Office booking website, if known." },
-        preferred_times: { type: "string", description: "Any timing the user wants (e.g. 'next week mornings')." },
+        preferred_times: { type: "string", description: "Timing the USER stated or their remembered preference (e.g. 'weekday mornings'). Do NOT invent one — if you don't know their availability, ask first and omit this." },
         insurance: { type: "string", description: "Insurance carrier/plan to use, if the user specified." },
         specialty: { type: "string", description: "Normalized specialty if known." },
         member: { type: "string", description: "Family member name; omit for the user." },

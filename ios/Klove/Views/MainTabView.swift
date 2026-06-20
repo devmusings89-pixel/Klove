@@ -18,7 +18,8 @@ enum KloveTab: Hashable {
 /// persistent "Ask Klove" affordance floating above the tab bar (never a tab). Settings live behind
 /// the operator avatar on Today.
 struct MainTabView: View {
-    @State private var selection = KloveTab(name: UserDefaults.standard.string(forKey: "initialTab"))
+    // Klove (the agent) is home — always land here. Deep links still switch tabs at runtime below.
+    @State private var selection: KloveTab = .ask
     @State private var store = HouseholdStore()
     @State private var showAsk = false
 
