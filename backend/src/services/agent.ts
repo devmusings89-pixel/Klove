@@ -18,6 +18,10 @@ import { bookingAgent } from "./agents/booking.js";
 import { healthQaAgent } from "./agents/healthqa.js";
 import { briefingAgent } from "./agents/briefing.js";
 import { assertCanOperate, BASE_SYSTEM, type AgentContext, type ProposedAction, type Subagent, type SubagentResult } from "./agents/shared.js";
+import { runAgentLoop } from "./agent-loop.js";
+import type { AgentCard } from "./agent-tools.js";
+import { addInsurance, upsertProfile } from "./profiles.js";
+import { upsertProvider } from "./providers.js";
 
 const PENDING_TTL_MS = 30 * 60_000; // a proposed action awaiting "yes" expires after 30 min
 const HISTORY_TURNS = 20;
@@ -145,25 +149,68 @@ export interface AskResult {
   routedTo: "ai" | "concierge";
   answer: string;
   taskId?: string;
+  /** Structured payloads for the chat to render (physician lists, booking recap, etc.). */
+  cards?: AgentCard[];
+  /** Set when the agent is awaiting confirmation for a state-changing action (Confirm card). */
+  proposal?: { restatement: string; tool: string };
 }
 
 /**
- * The in-app "Ask Klove" entry point — the SAME concierge brain as WhatsApp, adapted to a stateless
- * one-shot request. Informational asks (healthqa/briefing) return an answer; an actionable ask
- * (booking) is executed right away (booking is free + operator-authorized, and the app's Today/Actions
- * view is the confirmation + tracking surface) and the resulting task is returned so the UI can track
- * it. Consent is enforced inside executeAction, exactly as for WhatsApp.
+ * The in-app "Ask Klove" entry point — a tool-using AGENT. It runs a multi-step tool loop (search,
+ * records, briefing…) and either replies (with cards) or proposes a state-changing action, which it
+ * stores as the pending action and surfaces as a Confirm card — it does NOT auto-execute. A typed
+ * "yes"/"no" against a pending proposal resolves it (mirrors the WhatsApp gate). Falls back to the
+ * legacy single-subagent router when no tool-capable LLM is configured. Consent is enforced in
+ * executeAction, exactly as for WhatsApp.
  */
 export async function askKlove(operatorUserId: string, text: string): Promise<AskResult> {
   const householdId = await ensureHousehold(operatorUserId);
   const members = await accessibleSubjects(operatorUserId);
+  const trimmed = text.trim();
+  const convo = await getOrCreateConversation(operatorUserId, householdId);
+
+  // ---- Confirm-before-execute gate: a pending proposal + yes/no resolves it. ----
+  const pending = readPending(convo);
+  if (pending) {
+    if (isAffirmative(trimmed)) {
+      await clearPending(convo.id);
+      return runPending(operatorUserId, pending);
+    }
+    if (isNegative(trimmed)) {
+      await clearPending(convo.id);
+      return { kind: "answer", routedTo: "ai", answer: "Okay, cancelled. Anything else?" };
+    }
+    await clearPending(convo.id); // a new request supersedes the old proposal
+  }
+
   const [memory, history, activity] = await Promise.all([
     loadMemory(operatorUserId),
     loadAskHistory(operatorUserId),
     loadBookingActivity(householdId, members),
   ]);
-  const ctx: AgentContext = { operatorUserId, householdId, members, text: text.trim(), history, memory, activity };
+  const ctx: AgentContext = { operatorUserId, householdId, members, text: trimmed, history, memory, activity };
 
+  // ---- Agentic tool loop (preferred). ----
+  const loop = await runAgentLoop(ctx).catch((err) => {
+    console.error("agent loop failed:", (err as Error).message);
+    return null;
+  });
+  if (loop) {
+    void rememberFromTurn(operatorUserId, householdId, trimmed, memory).catch((e) => console.error("memory write failed", e));
+    if (loop.proposal) {
+      await storePending(convo.id, loop.proposal);
+      return {
+        kind: "answer",
+        routedTo: "ai",
+        answer: loop.reply,
+        cards: loop.cards.length ? loop.cards : undefined,
+        proposal: { restatement: loop.proposal.restatement, tool: loop.proposal.tool },
+      };
+    }
+    return { kind: "answer", routedTo: "ai", answer: loop.reply, cards: loop.cards.length ? loop.cards : undefined };
+  }
+
+  // ---- Fallback: legacy single-subagent router (no tool-capable LLM). ----
   let routed;
   try {
     routed = await routeAndRun(ctx);
@@ -171,18 +218,39 @@ export async function askKlove(operatorUserId: string, text: string): Promise<As
     console.error("askKlove failed:", (err as Error).message);
     return { kind: "answer", routedTo: "ai", answer: "Sorry — I couldn't process that just now. Try rephrasing?" };
   }
-  // The note path stored its preference synchronously; for other routes, learn in the background.
-  if (routed.route !== "note") void rememberFromTurn(operatorUserId, householdId, text, memory).catch((e) => console.error("memory write failed", e));
-
+  if (routed.route !== "note") void rememberFromTurn(operatorUserId, householdId, trimmed, memory).catch((e) => console.error("memory write failed", e));
   if (routed.result.kind === "reply") {
     return { kind: "answer", routedTo: "ai", answer: routed.result.text };
   }
-  const answer = await executeAction(operatorUserId, routed.result.action, "app");
+  // Legacy actionable path stays auto-execute (no loop = no card UI to confirm against).
+  return runPending(operatorUserId, routed.result.action);
+}
+
+/** Execute a confirmed/pending action and shape the AskResult (used by the gate + /ask/confirm). */
+async function runPending(operatorUserId: string, action: ProposedAction): Promise<AskResult> {
+  const answer = await executeAction(operatorUserId, action, "app");
   const task = await prisma.task.findFirst({
-    where: { subjectUserId: routed.result.action.subjectUserId, kind: { in: ["book", "choose_time"] } },
+    where: { subjectUserId: action.subjectUserId, kind: { in: ["book", "choose_time", "reminder"] } },
     orderBy: { createdAt: "desc" },
   });
   return { kind: "escalated", routedTo: "concierge", answer, taskId: task?.id ?? undefined };
+}
+
+/** Confirm the pending in-app proposal (the Confirm button → POST /ask/confirm). */
+export async function askConfirm(operatorUserId: string): Promise<AskResult> {
+  const householdId = await ensureHousehold(operatorUserId);
+  const convo = await getOrCreateConversation(operatorUserId, householdId);
+  const pending = readPending(convo);
+  if (!pending) return { kind: "answer", routedTo: "ai", answer: "There's nothing to confirm right now." };
+  await clearPending(convo.id);
+  return runPending(operatorUserId, pending);
+}
+
+/** Dismiss the pending in-app proposal (the Edit/cancel path). */
+export async function askCancel(operatorUserId: string): Promise<void> {
+  const householdId = await ensureHousehold(operatorUserId);
+  const convo = await getOrCreateConversation(operatorUserId, householdId);
+  await clearPending(convo.id);
 }
 
 // ---- Action execution (the ONLY place state changes happen; re-checks consent + audits). ----
@@ -237,10 +305,46 @@ async function executeAction(operatorUserId: string, action: ProposedAction, ori
       await audit(operatorUserId, task.subjectUserId, "booking_authorized", `WhatsApp chose slot: ${slot}`);
       return `Great — locking in ${slot}. I'll confirm here as soon as it's booked.`;
     }
+    case "set_reminder": {
+      const title = String(action.args.title ?? "Reminder");
+      const when = optStr(action.args.when);
+      await prisma.task.create({
+        data: { subjectUserId: action.subjectUserId, householdId, title, kind: "reminder", state: "needs_you", detail: when, originChannel },
+      });
+      await audit(operatorUserId, action.subjectUserId, "reminder_created", title);
+      return `Done — I've added a reminder${when ? ` for ${when}` : ""}: "${title}".`;
+    }
+    case "save_insurance": {
+      const carrier = String(action.args.carrier ?? "");
+      await addInsurance(action.subjectUserId, { carrier, planName: optStr(action.args.planName), memberId: optStr(action.args.memberId) });
+      await audit(operatorUserId, action.subjectUserId, "insurance_saved", carrier);
+      return `Saved ${carrier} to the insurance wallet — I'll use it for bookings and coverage checks.`;
+    }
+    case "update_profile": {
+      await upsertProfile(action.subjectUserId, { fullName: optStr(action.args.fullName), dob: optStr(action.args.dob), phone: optStr(action.args.phone) });
+      await audit(operatorUserId, action.subjectUserId, "profile_updated", "profile fields");
+      return `Updated the profile. 👍`;
+    }
+    case "save_provider": {
+      const name = String(action.args.name ?? "");
+      await upsertProvider({
+        householdId,
+        subjectUserId: action.args.memberId ? String(action.args.memberId) : null,
+        name,
+        phone: optStr(action.args.phone),
+        website: optStr(action.args.website),
+        specialty: optStr(action.args.specialty),
+        source: "manual",
+      });
+      await audit(operatorUserId, action.subjectUserId, "provider_saved", name);
+      return `Saved ${name} to your providers.`;
+    }
     default:
       return "I'm not able to do that one yet.";
   }
 }
+
+const optStr = (v: unknown): string | undefined => (v == null || v === "" ? undefined : String(v));
 
 async function audit(actorUserId: string, subjectUserId: string, action: string, detail: string): Promise<void> {
   await prisma.auditEvent.create({ data: { actorUserId, subjectUserId, action, detail } }).catch((e) => console.error("audit write failed", e));

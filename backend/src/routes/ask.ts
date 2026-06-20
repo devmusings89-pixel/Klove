@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { prisma } from "../db.js";
 import { requireUser, resolveSubject, isConsentError } from "../services/auth.js";
 import { buildTimeline, buildSeries } from "../services/graph.js";
-import { askKlove } from "../services/agent.js";
+import { askKlove, askConfirm, askCancel } from "../services/agent.js";
 import { runText, llmAvailable } from "../services/llm-tool.js";
 
 /**
@@ -26,6 +26,22 @@ export async function askRoutes(app: FastifyInstance) {
     });
 
     return reply.send(result);
+  });
+
+  // Confirm the agent's pending proposal (the Confirm button on a booking/action card).
+  app.post("/ask/confirm", { preHandler: requireUser }, async (req, reply) => {
+    const result = await askConfirm(req.user!.id);
+    const householdId = (await prisma.household.findUnique({ where: { operatorUserId: req.user!.id } }))?.id;
+    await prisma.request.create({
+      data: { operatorUserId: req.user!.id, householdId, text: "[confirm]", kind: "ask", responseJson: JSON.stringify(result), status: "resolved" },
+    });
+    return reply.send(result);
+  });
+
+  // Dismiss the agent's pending proposal (Edit/cancel).
+  app.post("/ask/cancel", { preHandler: requireUser }, async (req, reply) => {
+    await askCancel(req.user!.id);
+    return reply.send({ ok: true });
   });
 
   // "Show me X for <member>": a focused, grounded view (filtered timeline) — not a dashboard.
