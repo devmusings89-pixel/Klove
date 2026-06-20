@@ -159,20 +159,20 @@ async function liveBooking(operatorUserId: string, subjectUserId: string, househ
   let website = input.website?.trim() || null;
   const email = input.email?.trim() || null;
   let resolvedAddress: string | null = null;
-  if (!phone && !website && !email && provider) {
+  // Enrich ALL reachable channels for a named office (not just when nothing was passed). The caller often
+  // gives only a phone, but if the office also has an online booking site we want the web channel to get
+  // its (higher-priority) shot at the form — otherwise we'd never discover a clear "Book Appointment" page.
+  if (provider && (!phone || !website)) {
     const known = await resolveProvider({ householdId, subjectUserId, providerHint: provider, specialty: input.specialty, reason });
-    if (known.provider) {
-      phone = known.provider.phone ?? null;
-      website = known.provider.website ?? null;
-      resolvedAddress = known.provider.address ?? null;
-    } else if (known.fromPlaces) {
-      phone = known.fromPlaces.phone ?? null;
-      website = known.fromPlaces.website ?? null;
-      resolvedAddress = known.fromPlaces.address ?? null;
-    } else if (enabled.googlePlaces()) {
-      phone = await lookupPhoneNumber(provider);
-      if (!phone) website = await lookupWebsite(provider);
+    const src = known.provider ?? known.fromPlaces ?? null;
+    if (src) {
+      phone = phone ?? src.phone ?? null;
+      website = website ?? src.website ?? null;
+      resolvedAddress = known.provider?.address ?? known.fromPlaces?.address ?? null;
     }
+    // Still missing a channel? Look it up by name via Places so web (form) + voice are both available.
+    if (!website && enabled.googlePlaces()) website = await lookupWebsite(provider);
+    if (!phone && enabled.googlePlaces()) phone = await lookupPhoneNumber(provider);
   }
   // If there's still no way to reach anyone, don't fabricate a booking — surface a task to finish it.
   if (!phone && !website && !email) {
@@ -183,14 +183,16 @@ async function liveBooking(operatorUserId: string, subjectUserId: string, househ
   // Full patient details (name, DOB, insurance) so the AI can introduce the patient on the call.
   const patient = await buildPatientInfo(subjectUserId, operatorUserId, input, reason);
 
-  // Reuse this office's preferred booking method if we've learned one from a past successful booking,
-  // so the router tries it first (web/voice/messaging) before falling back.
-  const preferredChannel = provider
+  // Reuse this office's learned preferred method so the router tries it first. BUT never let a remembered
+  // phone/email preference hide a usable online booking form: when the office has a website, online
+  // booking (web, the highest-priority channel) still gets the first shot and falls back if it can't.
+  const remembered = provider
     ? (await prisma.provider.findFirst({
         where: { householdId, name: { equals: provider, mode: "insensitive" } },
         select: { preferredBookingMethod: true },
       }))?.preferredBookingMethod ?? null
     : null;
+  const preferredChannel = remembered && remembered !== "web" && website ? null : remembered;
 
   const session = await prisma.session.create({
     data: {

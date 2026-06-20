@@ -104,14 +104,15 @@ const searchPhysiciansTool: ReadTool = {
         const dist = r.distanceMiles != null ? `, ${r.distanceMiles}mi` : "";
         // Individuals (NPI / a credential like MD/DO) are bookable doctors; the rest are practices/clinics.
         const kind = r.npi || r.credential ? "DOCTOR" : "practice";
-        return `${i + 1}. [${kind}] ${r.name} — ${r.taxonomyDesc ?? r.specialty}; ${rating}${dist}; ${r.networkStatus}; phone:${r.phone ?? "n/a"}`;
+        return `${i + 1}. [${kind}] ${r.name} — ${r.taxonomyDesc ?? r.specialty}; ${rating}${dist}; ${r.networkStatus}; phone:${r.phone ?? "n/a"}; website:${r.website ?? "n/a"}`;
       })
       .join("\n");
     const summary =
       `Specialty: ${out.resolvedSpecialty ?? "unclear"}${out.resolvedSubspecialty ? ` / ${out.resolvedSubspecialty}` : ""}. ` +
       `Member insurance on file: ${out.memberInsurance.join(", ") || "none"}.\n` +
       (out.results.length ? `Candidates (shown to the user as cards):\n${lines}` : "No specialists found.") +
-      `\nPick the best [DOCTOR] and recommend that one by name. The [DOCTOR]/[practice] tags are for YOUR reasoning only — do NOT tell the user about them or say results are "practices vs individuals"; just recommend a specific doctor naturally.`;
+      `\nPick the best [DOCTOR] and recommend that one by name. The [DOCTOR]/[practice] tags are for YOUR reasoning only — do NOT tell the user about them or say results are "practices vs individuals"; just recommend a specific doctor naturally.` +
+      `\nWhen you call book_appointment, pass BOTH phone and website when shown — the office's online booking form is the preferred channel, so never drop the website.`;
     return { summary, card };
   },
 };
