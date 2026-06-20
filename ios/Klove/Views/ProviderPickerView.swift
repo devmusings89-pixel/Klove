@@ -38,6 +38,7 @@ struct ProviderPickerView: View {
                 Section {
                     TextField("Search providers or offices", text: $query)
                         .onChange(of: query) { _, q in scheduleSearch(q) }
+                        .accessibilityIdentifier("provider.search")
                     if loading { Label("Searching…", systemImage: "magnifyingglass").font(.caption).foregroundStyle(.secondary) }
                 }
                 Section {
@@ -45,6 +46,7 @@ struct ProviderPickerView: View {
                         Label("Find a specialist", systemImage: "stethoscope")
                     }
                     .tint(Theme.accent)
+                    .accessibilityIdentifier("provider.findSpecialist")
                 } footer: {
                     Text("Describe a condition and Klove finds the right expert — ranked by credentials, ratings, and your insurance.")
                 }

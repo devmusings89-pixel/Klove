@@ -29,6 +29,8 @@ after(async () => {
   await prisma.observation.deleteMany({ where: { userId: { in: userIds } } });
   await prisma.condition.deleteMany({ where: { userId: { in: userIds } } });
   await prisma.healthAlert.deleteMany({ where: { userId: { in: userIds } } });
+  // a successful reconcile saves the booked office into the household provider directory — delete before household.
+  await prisma.provider.deleteMany({ where: { household: { operatorUserId: { in: userIds } } } });
   await prisma.householdMembership.deleteMany({ where: { userId: { in: userIds } } });
   await prisma.household.deleteMany({ where: { operatorUserId: { in: userIds } } });
   await prisma.user.deleteMany({ where: { id: { in: userIds } } });

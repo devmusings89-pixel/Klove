@@ -24,6 +24,14 @@ final class AuthService: NSObject {
         if let t = ProcessInfo.processInfo.environment["KLOVE_TEST_BEARER"], !t.isEmpty {
             KeychainStore.set(t, for: AppStorageKey.authToken)
         }
+        // Mock-mode test hook for the E2E QA agent: boot straight into the app as a seeded operator via
+        // the dev `x-user-email` identity (KLOVE_TEST_EMAIL=operator@klove.e2e). Sets the dev email and
+        // marks onboarding complete so the agent lands on MainTabView. Only meaningful when Supabase is
+        // unconfigured (mock build); ignored otherwise. DEBUG-only.
+        if let e = ProcessInfo.processInfo.environment["KLOVE_TEST_EMAIL"], !e.isEmpty {
+            UserDefaults.standard.set(e, forKey: AppStorageKey.userEmail)
+            UserDefaults.standard.set(true, forKey: AppStorageKey.hasOnboarded)
+        }
         #endif
         isAuthenticated = isSignedIn
     }

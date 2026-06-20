@@ -19,6 +19,7 @@
     "create-assistant": "tsx --env-file=.env scripts/create-vapi-assistant.ts",
     "send-summary": "tsx --env-file=.env scripts/send-summary.ts",
     "recon-web": "tsx --env-file=.env scripts/recon-web.ts",
+    "seed:e2e": "tsx --env-file=.env scripts/seed-e2e.ts",
     "test": "node --test --import tsx test/*.test.ts"
   },
   "dependencies": {

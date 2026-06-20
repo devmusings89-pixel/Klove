@@ -36,6 +36,8 @@ after(async () => {
     where: { OR: [{ subjectUserId: { in: userIds } }, { household: { operatorUserId: { in: userIds } } }] },
   });
   await prisma.appointment.deleteMany({ where: { userId: { in: userIds } } });
+  // reconcile/booking can auto-generate reminders for these users' appointments — delete before users.
+  await prisma.reminder.deleteMany({ where: { subjectUserId: { in: userIds } } });
   await prisma.message.deleteMany({ where: { subjectUserId: { in: userIds } } });
   await prisma.task.deleteMany({ where: { subjectUserId: { in: userIds } } });
   await prisma.householdMembership.deleteMany({ where: { userId: { in: userIds } } });

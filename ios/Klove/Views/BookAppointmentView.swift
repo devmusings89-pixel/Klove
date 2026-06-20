@@ -65,6 +65,7 @@ struct BookAppointmentView: View {
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Review") { Task { await prepare() } }
                             .disabled(reason.trimmingCharacters(in: .whitespaces).isEmpty || preparing)
+                            .accessibilityIdentifier("booking.review")
                     }
                 }
             }
@@ -131,6 +132,7 @@ struct BookAppointmentView: View {
 
             Section("What's the visit for?") {
                 TextField("e.g. Annual physical, dermatology", text: $reason)
+                    .accessibilityIdentifier("booking.reason")
             }
             Section {
                 if let p = selectedProvider {
@@ -152,6 +154,7 @@ struct BookAppointmentView: View {
                         Label("Choose a provider", systemImage: "magnifyingglass")
                     }
                     .tint(Theme.accent)
+                    .accessibilityIdentifier("booking.chooseProvider")
                 }
             } header: {
                 Text("Provider or office")
@@ -198,6 +201,7 @@ struct BookAppointmentView: View {
                         Label("Confirm & book", systemImage: "checkmark.circle.fill")
                     }
                     .buttonStyle(KlovePrimaryButtonStyle()).disabled(booking)
+                    .accessibilityIdentifier("booking.confirm")
                 } else {
                     recapCandidates(p)
                 }

@@ -35,3 +35,7 @@ DerivedData/
 # ---- WhatsApp (Baileys) session credentials — sensitive, never commit ----
 **/.baileys-auth/
 **/.baileys-probe/
+
+# ---- QA agent run output (screenshots + reports) — keep the dir, not the runs ----
+qa/reports/*
+!qa/reports/.gitkeep

@@ -105,6 +105,7 @@ struct AskKloveView: View {
             HStack {
                 TextField("Ask anything, or describe what you need", text: $text, axis: .vertical)
                     .textFieldStyle(.plain).font(.kloveBody)
+                    .accessibilityIdentifier("ask.input")
                 if speech.isAvailable {
                     Button { speech.toggle() } label: {
                         Image(systemName: speech.isRecording ? "stop.circle.fill" : "mic")
@@ -126,6 +127,7 @@ struct AskKloveView: View {
                 }
             }
             .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty || thinking)
+            .accessibilityIdentifier("ask.send")
         }
         .padding(.horizontal, Theme.Spacing.lg).padding(.vertical, Theme.Spacing.sm)
         .background(Theme.background)

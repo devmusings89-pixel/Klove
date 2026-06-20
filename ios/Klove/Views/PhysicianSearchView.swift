@@ -65,6 +65,7 @@ struct PhysicianSearchView: View {
                 .lineLimit(1...3)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { Task { await model.search() } }
+                .accessibilityIdentifier("physician.condition")
             HStack(spacing: Theme.Spacing.md) {
                 TextField("Location — e.g. Seattle, WA", text: $model.location)
                     .textFieldStyle(.roundedBorder)
@@ -85,6 +86,7 @@ struct PhysicianSearchView: View {
             }
             .buttonStyle(KlovePrimaryButtonStyle())
             .disabled(!model.canSearch)
+            .accessibilityIdentifier("physician.search")
         }
     }
 
@@ -308,6 +310,7 @@ struct PhysicianDetailView: View {
                 Label("Use this provider", systemImage: "checkmark.circle.fill")
             }
             .buttonStyle(KlovePrimaryButtonStyle())
+            .accessibilityIdentifier("physician.useProvider")
         } else {
             Button { showBook = true } label: {
                 Label("Klove Book an appointment", systemImage: "calendar.badge.plus")
