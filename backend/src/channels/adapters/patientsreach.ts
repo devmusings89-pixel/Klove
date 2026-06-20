@@ -353,8 +353,9 @@ function reasonToVisit(reason: string): RegExp | null {
 
 export function matchesWindow(day: string, time: string, window: string): boolean {
   const w = (window || "").toLowerCase().trim();
-  if (!w || /\bany\b|anytime|flexible|asap|earliest|first available/.test(w)) return true;
+  if (!w) return true;
 
+  // Day constraints.
   const dayAliases: Record<string, string[]> = {
     SUN: ["sun", "sunday"], MON: ["mon", "monday"], TUE: ["tue", "tues", "tuesday"], WED: ["wed", "wednesday"],
     THU: ["thu", "thur", "thurs", "thursday"], FRI: ["fri", "friday"], SAT: ["sat", "saturday"],
@@ -364,9 +365,23 @@ export function matchesWindow(day: string, time: string, window: string): boolea
   const mentionedDays = Object.entries(dayAliases)
     .filter(([, aliases]) => aliases.some((a) => new RegExp(`\\b${a}\\b`).test(w)))
     .map(([k]) => k);
+  const hasDayConstraint = mentionedDays.length > 0 || mentionsWeekend || mentionsWeekday;
+
+  // Time-of-day constraints.
+  const tod: [number, number][] = [];
+  if (/morning/.test(w)) tod.push([0, 12]);
+  if (/afternoon/.test(w)) tod.push([12, 17]);
+  if (/evening|night/.test(w)) tod.push([17, 24]);
+  const after = w.match(/after\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/);
+  const before = w.match(/before\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/);
+  const hasTimeConstraint = tod.length > 0 || !!after || !!before;
+
+  // No real constraint (e.g. "any time", "asap", "flexible", "earliest") → anything is acceptable. But a
+  // phrase like "Saturday any time" DOES constrain the day — "any" must not override the day filter.
+  if (!hasDayConstraint && !hasTimeConstraint) return true;
 
   let dayOk = true;
-  if (mentionedDays.length || mentionsWeekend || mentionsWeekday) {
+  if (hasDayConstraint) {
     const allowed = new Set(mentionedDays);
     if (mentionsWeekend) { allowed.add("SAT"); allowed.add("SUN"); }
     if (mentionsWeekday) ["MON", "TUE", "WED", "THU", "FRI"].forEach((d) => allowed.add(d));
@@ -375,13 +390,7 @@ export function matchesWindow(day: string, time: string, window: string): boolea
 
   const hour = parseHour(time);
   let timeOk = true;
-  const tod: [number, number][] = [];
-  if (/morning/.test(w)) tod.push([0, 12]);
-  if (/afternoon/.test(w)) tod.push([12, 17]);
-  if (/evening|night/.test(w)) tod.push([17, 24]);
   if (tod.length && hour != null) timeOk = tod.some(([lo, hi]) => hour >= lo && hour < hi);
-  const after = w.match(/after\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/);
-  const before = w.match(/before\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/);
   if (after && hour != null) timeOk = timeOk && hour >= to24(after);
   if (before && hour != null) timeOk = timeOk && hour < to24(before);
 
