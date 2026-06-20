@@ -1,4 +1,22 @@
 import SwiftUI
+import EventKit
+
+/// Adds an appointment to the user's iOS calendar (write-only access, iOS 17+).
+enum CalendarService {
+    static func add(title: String, start: Date, end: Date?, location: String?, notes: String?) async throws {
+        let store = EKEventStore()
+        let granted = try await store.requestWriteOnlyAccessToEvents()
+        guard granted else { throw AppError.validationError(message: "Calendar access was denied. Enable it in Settings → Klove.") }
+        let event = EKEvent(eventStore: store)
+        event.title = title
+        event.startDate = start
+        event.endDate = end ?? start.addingTimeInterval(3600)
+        event.location = location
+        event.notes = notes
+        event.calendar = store.defaultCalendarForNewEvents
+        try store.save(event, span: .thisEvent)
+    }
+}
 
 /// The unified appointment screen. One surface across the visit lifecycle — Upcoming · In visit ·
 /// Past (the phase chip) — with a Brief / Discussion segmented control. Brief shows Klove's one-page
@@ -38,6 +56,7 @@ struct AppointmentDetailView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    Button { Task { await addToCalendar() } } label: { Label("Add to Calendar", systemImage: "calendar.badge.plus") }
                     Button { showReschedule = true } label: { Label("Reschedule", systemImage: "calendar.badge.clock") }
                     if !appt.isProvisional {
                         Button { showSummary = true } label: { Label("Log visit summary", systemImage: "square.and.pencil") }
@@ -121,6 +140,11 @@ struct AppointmentDetailView: View {
             } else if phase.label == "Past" {
                 Button { showSummary = true } label: { Label("Log visit summary", systemImage: "square.and.pencil") }
                     .buttonStyle(KlovePrimaryButtonStyle()).disabled(working)
+            }
+
+            if appt.startsAt != nil {
+                Button { Task { await addToCalendar() } } label: { Label("Add to Calendar", systemImage: "calendar.badge.plus") }
+                    .font(.kloveBodyStrong).tint(Theme.accent).disabled(working)
             }
         }
     }
@@ -231,6 +255,21 @@ struct AppointmentDetailView: View {
         let iso = ISO8601DateFormatter().string(from: newDate)
         if (try? await api.rescheduleAppointment(memberId, appointmentId: appt.id, startsAt: iso)) != nil {
             showReschedule = false; note = "Rescheduled."; onChange()
+        }
+    }
+
+    private func addToCalendar() async {
+        guard let s = appt.startsAt, let start = ISO8601DateFormatter().date(from: s) else {
+            note = "This appointment doesn't have a set time yet."
+            return
+        }
+        let notesText = ["For \(memberName)", appt.confirmation.map { "Confirmation \($0)" } ?? "", "Added by Klove"]
+            .filter { !$0.isEmpty }.joined(separator: "\n")
+        do {
+            try await CalendarService.add(title: appt.title, start: start, end: nil, location: appt.provider, notes: notesText)
+            note = "Added to your calendar."
+        } catch {
+            note = (error as? AppError)?.errorDescription ?? "Couldn't add to calendar."
         }
     }
 

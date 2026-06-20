@@ -330,6 +330,13 @@ async function executeAction(operatorUserId: string, action: ProposedAction, ori
       await audit(operatorUserId, action.subjectUserId, "profile_updated", "profile fields");
       return `Updated the profile. 👍`;
     }
+    case "cancel_booking": {
+      const { cancelActiveBooking } = await import("./concierge.js");
+      const res = await cancelActiveBooking(action.subjectUserId, householdId);
+      await audit(operatorUserId, action.subjectUserId, "booking_cancelled", res.title ?? "booking");
+      if (res.cancelled === 0) return "I don't see an active booking to stop right now — nothing to close out.";
+      return `Done — I've stopped that booking and closed it out${res.title ? ` (${res.title.replace(/^(Booking|Cancelled|Pick a time): /, "")})` : ""}. Nothing more will be attempted.`;
+    }
     case "save_provider": {
       const name = String(action.args.name ?? "");
       await upsertProvider({

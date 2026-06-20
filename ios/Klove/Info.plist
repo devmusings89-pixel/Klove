@@ -31,6 +31,10 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+	<string>Klove adds your appointments to your calendar so you never miss a visit.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Klove adds your appointments to your calendar so you never miss a visit.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Klove uses the camera to capture photos of lab results, insurance cards, and other health documents.</string>
 	<key>NSHealthClinicalHealthRecordsShareUsageDescription</key>

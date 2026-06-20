@@ -79,7 +79,7 @@ struct ActionsView: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
             Text("Klove's ledger · everything we're tracking".uppercased())
                 .font(.kloveLabel).tracking(Theme.Tracking.label).foregroundStyle(Theme.inkSecondary)
-            KloveSegmentedControl(segments: ["Active", "Done"], selection: $segment)
+            KloveSegmentedControl(segments: ["In Progress (\(needsYou.count + waiting.count))", "Completed (\(handled.count))"], selection: $segment)
         }
     }
 
@@ -96,7 +96,7 @@ struct ActionsView: View {
 
     private var allClear: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            Text(segment == 0 ? "Nothing active" : "Nothing here yet")
+            Text(segment == 0 ? "Nothing in progress" : "Nothing completed yet")
                 .font(.kloveSerifHeading).foregroundStyle(Theme.ink)
             Text(segment == 0 ? "Klove isn't waiting on anything right now."
                               : "Completed tasks will collect here.")

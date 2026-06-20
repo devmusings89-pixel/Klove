@@ -40,6 +40,9 @@ async function seedPending(userId: string, householdId: string, action: unknown)
 }
 
 after(async () => {
+  await prisma.callResult.deleteMany({ where: { callTarget: { session: { userId: { in: userIds } } } } });
+  await prisma.callTarget.deleteMany({ where: { session: { userId: { in: userIds } } } });
+  await prisma.session.deleteMany({ where: { userId: { in: userIds } } });
   await prisma.agentConversation.deleteMany({ where: { userId: { in: userIds } } });
   await prisma.message.deleteMany({ where: { household: { operatorUserId: { in: userIds } } } });
   await prisma.request.deleteMany({ where: { operatorUserId: { in: userIds } } });
@@ -113,6 +116,32 @@ test("askConfirm with nothing pending is a no-op answer", async () => {
   const res = await askConfirm(op.id);
   assert.equal(res.kind, "answer");
   assert.match(res.answer, /nothing to confirm/i);
+});
+
+test("cancel_booking actually stops the booking (chat + Actions stay consistent)", async () => {
+  const op = await mkOperator("cancel");
+  // An in-flight booking: a session being retried + its tracking task (kind book, waiting).
+  const session = await prisma.session.create({
+    data: {
+      userId: op.id,
+      patientInfo: "{}",
+      status: "in_progress",
+      targets: { create: { officeName: "Dr. Issa", order: 0, status: "retry_wait", nextAttemptAt: new Date(Date.now() + 1_000_000) } },
+    },
+  });
+  const task = await prisma.task.create({
+    data: { subjectUserId: op.id, householdId: op.householdId, title: "Booking: migraine consult", kind: "book", state: "waiting", conciergeJobId: session.id },
+  });
+
+  await seedPending(op.id, op.householdId, { tool: "cancel_booking", args: {}, subjectUserId: op.id, restatement: "Stop and close out the booking?" });
+  const res = await askConfirm(op.id);
+  assert.match(res.answer, /stopped|closed/i);
+
+  // The task is closed, the session is failed (scheduler stops), and the target won't be re-dialed.
+  assert.equal((await prisma.task.findUnique({ where: { id: task.id } }))?.state, "handled");
+  assert.equal((await prisma.session.findUnique({ where: { id: session.id } }))?.status, "failed");
+  const target = await prisma.callTarget.findFirst({ where: { sessionId: session.id } });
+  assert.equal(target?.status, "failed");
 });
 
 test("confirm enforces consent for an unrelated subject", async () => {

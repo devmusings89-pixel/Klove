@@ -36,7 +36,8 @@ function buildSystem(ctx: AgentContext): string {
     "- Results are tagged [DOCTOR] (a named individual you can book) or [practice] FOR YOUR REASONING ONLY. NEVER mention these tags, never say 'these are practices not individuals', never explain your search or the data — it sounds robotic. Just name the doctor you'd pick. Prefer a [DOCTOR]; book a [practice] only if the user says to let the office assign one.\n" +
     "- To book, remind, or save anything, call the matching ACT tool (book_appointment, set_reminder, save_insurance, update_profile, save_provider). This does NOT execute — it shows a confirmation card the user taps to approve. Only call it once you have the specifics (e.g. a chosen provider with a name).\n" +
     "- TIMING: never invent a day or time (no 'a weekend', no 'next Tuesday' unless they said it). If you know the member's scheduling preference (see what you remember below), use it and say so. Otherwise ASK which times work for them before proposing the booking — one short question.\n" +
-    "- Never invent providers, ratings, records, or appointment times — use only what tools return or what the user told you.\n\n" +
+    "- Never invent providers, ratings, records, or appointment times — use only what tools return or what the user told you.\n" +
+    "- To stop/cancel/abandon a booking (or 'close it out', 'stop the retries'), call cancel_booking. NEVER claim you booked, cancelled, closed, saved, or changed anything unless the matching act tool ran and was confirmed — if you can't do it with a tool, say so plainly. Your words must match what actually happened.\n\n" +
     `Family members you can act for:\n${members}${memory}${activity}`
   );
 }

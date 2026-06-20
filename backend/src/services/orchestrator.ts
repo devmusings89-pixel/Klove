@@ -1,6 +1,7 @@
 import { prisma } from "../db.js";
 import { fromJson, toJson } from "./json.js";
-import { isWithinBusinessHours } from "./scheduler.js";
+import { encryptField } from "./crypto.js";
+import { isWithinBusinessHours, nextBusinessStart } from "./scheduler.js";
 import { routeAndAttempt, getChannel } from "../channels/registry.js";
 import type { BookingContext, ChannelResult, ChannelType } from "../channels/types.js";
 import type { CallStructuredData, CallOutcome, PatientInfo } from "../types.js";
@@ -113,12 +114,17 @@ export function shouldRetry(status: string, attempts: number, maxCalls: number):
   return RETRYABLE_STATUSES.includes(status) && attempts < maxCalls;
 }
 
+/** When to re-dial: after the backoff, but never while the office is closed — snap into business hours. */
+function retryAt(timezone: string): Date {
+  return nextBusinessStart(timezone, new Date(Date.now() + RETRY_BACKOFF_MS));
+}
+
 /** Mark a target unreachable — schedule a backed-off retry if attempts remain, else leave it terminal. */
 async function markUnreachable(targetId: string, status: "no_answer" | "voicemail"): Promise<void> {
   const t = await prisma.callTarget.findUnique({ where: { id: targetId }, include: { session: true } });
   if (!t) return;
   if (shouldRetry(status, t.attempts, t.session.maxCalls)) {
-    await prisma.callTarget.update({ where: { id: targetId }, data: { status: "retry_wait", nextAttemptAt: new Date(Date.now() + RETRY_BACKOFF_MS) } });
+    await prisma.callTarget.update({ where: { id: targetId }, data: { status: "retry_wait", nextAttemptAt: retryAt(t.timezone) } });
   } else {
     await prisma.callTarget.update({ where: { id: targetId }, data: { status, nextAttemptAt: null } });
   }
@@ -187,8 +193,9 @@ async function persistResult(args: {
       callTargetId: args.targetId,
       phase: args.phase,
       channel: args.channel,
-      transcript: args.transcript,
-      summary: args.summary,
+      // Encrypt the rawest free-text PHI at rest (the call conversation + its summary).
+      transcript: encryptField(args.transcript),
+      summary: encryptField(args.summary),
       structuredData: toJson(sd),
       recordingUrl: args.recordingUrl,
       endedReason: args.endedReason,
@@ -202,7 +209,7 @@ async function persistResult(args: {
     const t = await prisma.callTarget.findUnique({ where: { id: args.targetId }, include: { session: true } });
     if (t && shouldRetry(status, t.attempts, t.session.maxCalls)) {
       finalStatus = "retry_wait";
-      nextAttemptAt = new Date(Date.now() + RETRY_BACKOFF_MS);
+      nextAttemptAt = retryAt(t.timezone);
     }
   }
 

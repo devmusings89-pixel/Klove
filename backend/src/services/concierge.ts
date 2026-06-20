@@ -290,6 +290,37 @@ export interface BookingPlan {
  * operator confirms. The in-app flow renders this, then calls bookAppointment on confirm. When nothing
  * reachable resolves, returns status "needs_provider" with directory candidates to pick from or add.
  */
+/**
+ * Stop + close out a member's in-flight booking(s) — the agent's "cancel/abandon/close it out" action.
+ * Fails the underlying session so the scheduler stops re-dialing, cancels any non-booked targets, and
+ * marks the tracking task handled so the chat AND the Actions tab reflect the same (closed) state.
+ * Returns how many were closed + the latest title, so the agent can confirm honestly (never claim a
+ * cancel that didn't happen). Bookings already confirmed (booked) are left alone.
+ */
+export async function cancelActiveBooking(
+  subjectUserId: string,
+  householdId: string,
+): Promise<{ cancelled: number; title: string | null }> {
+  const tasks = await prisma.task.findMany({
+    where: { subjectUserId, householdId, kind: { in: ["book", "choose_time"] }, state: { in: ["waiting", "needs_you"] } },
+    orderBy: { createdAt: "desc" },
+  });
+  for (const t of tasks) {
+    if (t.conciergeJobId) {
+      await prisma.session.update({ where: { id: t.conciergeJobId }, data: { status: "failed" } }).catch(() => {});
+      await prisma.callTarget.updateMany({
+        where: { sessionId: t.conciergeJobId, status: { notIn: ["booked", "transferred"] } },
+        data: { status: "failed", nextAttemptAt: null },
+      });
+    }
+    await prisma.task.update({
+      where: { id: t.id },
+      data: { state: "handled", kind: "book", detail: "Cancelled — you asked Klove to stop.", title: t.title.replace(/^(Booking|Pick a time): /, "Cancelled: ") },
+    });
+  }
+  return { cancelled: tasks.length, title: tasks[0]?.title ?? null };
+}
+
 export async function prepareBooking(
   operatorUserId: string,
   subjectUserId: string,

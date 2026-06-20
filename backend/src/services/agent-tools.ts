@@ -357,12 +357,39 @@ const saveProviderTool: ActTool = {
   },
 };
 
+const cancelBookingTool: ActTool = {
+  kind: "act",
+  spec: {
+    name: "cancel_booking",
+    description:
+      "Propose stopping and closing out an in-flight booking for a member (the user wants to cancel, " +
+      "abandon, stop the retries, or close it out). Call this whenever they ask to stop/cancel a booking — " +
+      "do NOT just say it's done.",
+    parameters: {
+      type: "object",
+      properties: { member: { type: "string", description: "Family member whose booking to stop; omit for the user." } },
+    },
+  },
+  async build(ctx, args) {
+    const subject = resolveSubject(ctx, str(args.member));
+    return {
+      action: {
+        tool: "cancel_booking",
+        args: {},
+        subjectUserId: subject.id,
+        restatement: `Stop and close out the booking${subject.id !== ctx.members[0]?.id ? ` for ${subject.name}` : ""}?`,
+      },
+    };
+  },
+};
+
 export const AGENT_TOOLS: AgentTool[] = [
   searchPhysiciansTool,
   physicianDetailsTool,
   healthLookupTool,
   briefingTool,
   bookAppointmentTool,
+  cancelBookingTool,
   setReminderTool,
   saveInsuranceTool,
   updateProfileTool,
