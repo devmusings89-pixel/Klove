@@ -7,6 +7,59 @@ struct AskResult: Decodable {
     let routedTo: String    // ai | concierge
     /// Grounding sources behind the answer (titles), when the backend provides them.
     let sources: [String]?
+    /// Structured cards the agent wants shown inline (physician lists, booking recap, …).
+    let cards: [AgentCard]?
+    /// Set when the agent is awaiting confirmation for a state-changing action.
+    let proposal: AskProposal?
+}
+
+/// The agent's pending state-changing action, awaiting a Confirm tap.
+struct AskProposal: Decodable, Hashable {
+    let restatement: String
+    let tool: String
+}
+
+/// A recap of a proposed booking (shown with Confirm / Edit).
+struct BookingRecap: Decodable, Hashable {
+    let reason: String
+    let provider: String?
+    let memberName: String
+    let phone: String?
+    let website: String?
+    let preferredTimes: String?
+    let insurance: String?
+}
+
+/// A structured payload the chat renders inline. Mirrors the backend `AgentCard` union.
+enum AgentCard: Decodable {
+    case physicianList(resolvedSpecialty: String?, memberInsurance: [String], results: [PhysicianResult])
+    case bookingRecap(BookingRecap)
+    case prepList(title: String, questions: [String])
+    case text(String)
+    case unknown
+
+    private enum K: String, CodingKey { case type, resolvedSpecialty, memberInsurance, results, recap, title, questions, text }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: K.self)
+        switch try c.decodeIfPresent(String.self, forKey: .type) ?? "" {
+        case "physician_list":
+            self = .physicianList(
+                resolvedSpecialty: try c.decodeIfPresent(String.self, forKey: .resolvedSpecialty),
+                memberInsurance: try c.decodeIfPresent([String].self, forKey: .memberInsurance) ?? [],
+                results: try c.decodeIfPresent([PhysicianResult].self, forKey: .results) ?? []
+            )
+        case "booking_recap":
+            self = .bookingRecap(try c.decode(BookingRecap.self, forKey: .recap))
+        case "prep_list":
+            self = .prepList(title: try c.decodeIfPresent(String.self, forKey: .title) ?? "",
+                             questions: try c.decodeIfPresent([String].self, forKey: .questions) ?? [])
+        case "text":
+            self = .text(try c.decodeIfPresent(String.self, forKey: .text) ?? "")
+        default:
+            self = .unknown
+        }
+    }
 }
 
 struct ShowMeResult: Decodable {
@@ -48,6 +101,17 @@ struct ShowMeSeries: Decodable {
 extension APIClient {
     func ask(_ text: String) async throws -> AskResult {
         try await post("/ask", body: ["text": text])
+    }
+
+    /// Confirm the agent's pending proposal (the Confirm button on a card).
+    func confirmAsk() async throws -> AskResult {
+        try await post("/ask/confirm", body: [String: String]())
+    }
+
+    /// Dismiss the agent's pending proposal (Edit / cancel).
+    @discardableResult
+    func cancelAsk() async throws -> EmptyResponse {
+        try await post("/ask/cancel", body: [String: String]())
     }
 
     func showMe(_ memberId: String, query: String) async throws -> ShowMeResult {

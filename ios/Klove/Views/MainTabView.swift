@@ -1,14 +1,15 @@
 import SwiftUI
 
 enum KloveTab: Hashable {
-    case today, family, records, actions
+    case ask, today, family, records, actions
 
     init(name: String?) {
         switch name {
+        case "today": self = .today
         case "family": self = .family
         case "records": self = .records
         case "actions": self = .actions
-        default: self = .today
+        default: self = .ask // the agent is home
         }
     }
 }
@@ -24,6 +25,10 @@ struct MainTabView: View {
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             TabView(selection: $selection) {
+                AskKloveView(inTab: true)
+                    .tabItem { Label("Klove", systemImage: "sparkles") }
+                    .tag(KloveTab.ask)
+
                 NavigationStack { TodayView() }
                     .tabItem { Label("Today", systemImage: "house") }
                     .tag(KloveTab.today)
@@ -42,14 +47,18 @@ struct MainTabView: View {
             }
             .tint(Theme.accent)
 
-            AskKloveButton { showAsk = true }
-                .padding(.trailing, 18)
-                .padding(.bottom, 58)
-                .accessibilityLabel("Ask Klove")
+            // Quick-open Ask from the other tabs; redundant on the Klove tab itself.
+            if selection != .ask {
+                AskKloveButton { showAsk = true }
+                    .padding(.trailing, 18)
+                    .padding(.bottom, 58)
+                    .accessibilityLabel("Ask Klove")
+            }
         }
         .environment(store)
         .task {
             await store.load()
+            await CapabilityStore.shared.refresh()   // learn which subsystems are live vs simulated
             PushManager.register()   // ask for notifications + register the APNs token
         }
         .onReceive(NotificationCenter.default.publisher(for: .kloveDeepLink)) { note in
