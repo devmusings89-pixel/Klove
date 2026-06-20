@@ -169,7 +169,10 @@ export async function memberCarrierNames(subjectUserId: string): Promise<string[
 
 // Allied-health credentials that aren't physicians — excluded from a "doctors" search. Blank credentials
 // are kept (some physicians omit it). MD/DO/NP/PA/DPM/DDS/DMD/OD remain.
-const ALLIED_HEALTH = new Set(["pt", "dpt", "pta", "ot", "otr", "ota", "cota", "rn", "lpn", "cna", "rd", "ldn", "lcsw", "msw", "slp", "ccc", "at", "atc", "ma"]);
+const ALLIED_HEALTH = new Set(["pt", "dpt", "pta", "ot", "otr", "ota", "cota", "rn", "lpn", "cna", "rd", "ldn", "lcsw", "msw", "slp", "ccc", "at", "atc", "ma", "dc", "dac", "lac", "lmt", "nd", "rmt"]);
+
+// Places-discovery names that are clearly not a physician practice for a medical specialty search.
+const NON_PHYSICIAN_PLACE = /chiropract|acupunctur|massage|\bspa\b|wellness center|physical therapy|naturopath|reiki|cryo/i;
 function isAlliedHealth(credential: string | null): boolean {
   if (!credential) return false;
   const c = credential.replace(/[.\s]/g, "").toLowerCase();
@@ -409,7 +412,9 @@ export async function searchPhysicians(input: PhysicianSearchInput): Promise<Phy
     const terms = [resolved.subspecialty, resolved.specialty].filter(Boolean).join(" ").trim() || resolved.npiTaxonomy || "";
     const query = input.location ? `${terms} near ${input.location}` : terms;
     const places = query ? await searchSpecialists(query, 8) : [];
-    placesScored = places.map((p) => scoreSpecialistPlace(p, resolved, audience, center));
+    placesScored = places
+      .filter((p) => !NON_PHYSICIAN_PLACE.test(p.name)) // drop chiropractic/massage/etc. from a physician search
+      .map((p) => scoreSpecialistPlace(p, resolved, audience, center));
   }
 
   // Merge NPI + discovery, dedupe by normalized name (keep the higher-scored — discovery usually wins on rating).

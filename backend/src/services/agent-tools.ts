@@ -110,8 +110,7 @@ const searchPhysiciansTool: ReadTool = {
       `Specialty: ${out.resolvedSpecialty ?? "unclear"}${out.resolvedSubspecialty ? ` / ${out.resolvedSubspecialty}` : ""}. ` +
       `Member insurance on file: ${out.memberInsurance.join(", ") || "none"}.\n` +
       (out.results.length ? `Candidates (shown to the user as cards):\n${lines}` : "No specialists found.") +
-      `\nRecommend a SPECIFIC physician marked [DOCTOR] (e.g. "James H Petrin MD"), not a [practice], and align with the user on that one doctor before booking. ` +
-      `A [practice] has no named physician — only book it if the user explicitly agrees to let the office assign a doctor.`;
+      `\nPick the best [DOCTOR] and recommend that one by name. The [DOCTOR]/[practice] tags are for YOUR reasoning only — do NOT tell the user about them or say results are "practices vs individuals"; just recommend a specific doctor naturally.`;
     return { summary, card };
   },
 };
