@@ -1,7 +1,8 @@
 import { prisma } from "../db.js";
 import { fromJson, toJson } from "./json.js";
 import { encryptField } from "./crypto.js";
-import { isWithinBusinessHours, nextBusinessStart } from "./scheduler.js";
+import { isWithinBusinessHours, nextBusinessStart, nextWithinHours } from "./scheduler.js";
+import { runTool } from "./llm-tool.js";
 import { routeAndAttempt, getChannel } from "../channels/registry.js";
 import type { BookingContext, ChannelResult, ChannelType } from "../channels/types.js";
 import type { CallStructuredData, CallOutcome, PatientInfo } from "../types.js";
@@ -119,6 +120,48 @@ function retryAt(timezone: string): Date {
   return nextBusinessStart(timezone, new Date(Date.now() + RETRY_BACKOFF_MS));
 }
 
+interface OfficeHours {
+  openHour: number;
+  closeHour: number;
+  days: string[];
+  hoursText: string;
+}
+
+const OFFICE_HOURS_TOOL = {
+  name: "report_office_hours",
+  description:
+    "From a call transcript/summary where a medical office stated its hours or when to call back, report those hours. Leave fields empty if the office did not state any.",
+  input_schema: {
+    type: "object",
+    properties: {
+      hours_text: { type: "string", description: "The stated hours in plain words, e.g. 'Mon–Fri 9am–5pm' or 'weekdays after 2pm'. Empty if none stated." },
+      open_hour: { type: "integer", description: "Opening hour in 24h local time (0–23). Omit if unknown." },
+      close_hour: { type: "integer", description: "Closing hour in 24h local time (0–23). Omit if unknown." },
+      days: { type: "array", items: { type: "string" }, description: "Open days as 3-letter names: mon,tue,wed,thu,fri,sat,sun. Omit if unknown." },
+    },
+    required: [],
+  } as Record<string, unknown>,
+};
+
+/** Best-effort: pull the office's stated callback hours from a no-answer/voicemail call. Null when none. */
+async function extractOfficeHours(transcript?: string, summary?: string): Promise<OfficeHours | null> {
+  const text = [summary, transcript].filter(Boolean).join("\n").trim();
+  if (!text) return null;
+  const out = await runTool<{ hours_text?: string; open_hour?: number; close_hour?: number; days?: string[] }>({
+    system: "You extract a medical office's stated callback/open hours from a phone-call transcript. Only report hours the office actually stated.",
+    content: `Call:\n${text.slice(0, 4000)}`,
+    tool: OFFICE_HOURS_TOOL,
+    maxTokens: 200,
+  }).catch(() => null);
+  if (!out || (!out.hours_text && out.open_hour == null)) return null;
+  return {
+    openHour: typeof out.open_hour === "number" ? out.open_hour : 9,
+    closeHour: typeof out.close_hour === "number" ? out.close_hour : 17,
+    days: Array.isArray(out.days) && out.days.length ? out.days : ["mon", "tue", "wed", "thu", "fri"],
+    hoursText: out.hours_text?.trim() || "",
+  };
+}
+
 /** Mark a target unreachable — schedule a backed-off retry if attempts remain, else leave it terminal. */
 async function markUnreachable(targetId: string, status: "no_answer" | "voicemail"): Promise<void> {
   const t = await prisma.callTarget.findUnique({ where: { id: targetId }, include: { session: true } });
@@ -203,13 +246,19 @@ async function persistResult(args: {
     },
   });
   // Bounded auto-retry: a no-answer/voicemail with attempts left becomes a backed-off retry, not terminal.
+  // When the office stated its hours on the call, schedule the retry within THOSE exact hours and record
+  // them so the user is told when Klove will call back.
   let finalStatus = status;
   let nextAttemptAt: Date | null = null;
+  let callbackHours: string | null | undefined = undefined;
   if (status === "no_answer" || status === "voicemail") {
     const t = await prisma.callTarget.findUnique({ where: { id: args.targetId }, include: { session: true } });
     if (t && shouldRetry(status, t.attempts, t.session.maxCalls)) {
       finalStatus = "retry_wait";
-      nextAttemptAt = retryAt(t.timezone);
+      const win = await extractOfficeHours(args.transcript, args.summary);
+      const base = new Date(Date.now() + RETRY_BACKOFF_MS);
+      nextAttemptAt = win ? nextWithinHours(t.timezone, base, win.openHour, win.closeHour, win.days) : nextBusinessStart(t.timezone, base);
+      callbackHours = win?.hoursText || null;
     }
   }
 
@@ -219,6 +268,7 @@ async function persistResult(args: {
       status: finalStatus,
       channel: args.channel,
       nextAttemptAt,
+      callbackHours,
       offeredSlots: status === "awaiting_choice" ? toJson(sd.offeredSlots) : args.existingOfferedSlots ?? undefined,
       missingInfo: status === "awaiting_info" ? toJson(sd.missingInfo) : args.existingMissingInfo ?? undefined,
     },

@@ -1,5 +1,6 @@
 import type { CallResult, CallTarget, Session } from "@prisma/client";
 import { fromJson } from "../services/json.js";
+import { decryptField } from "../services/crypto.js";
 import type { CallStructuredData, PatientInfo } from "../types.js";
 
 type FullTarget = CallTarget & { results: CallResult[] };
@@ -9,8 +10,8 @@ function serializeResult(r: CallResult) {
   return {
     phase: r.phase,
     channel: r.channel,
-    transcript: r.transcript,
-    summary: r.summary,
+    transcript: decryptField(r.transcript),
+    summary: decryptField(r.summary),
     structuredData: fromJson<CallStructuredData | null>(r.structuredData, null),
     recordingUrl: r.recordingUrl,
     endedReason: r.endedReason,
@@ -65,6 +66,7 @@ export function serializeSession(s: FullSession) {
         attempts: t.attempts,
         nextAttemptAt: t.nextAttemptAt,
         maxAttempts: s.maxCalls,
+        callbackHours: t.callbackHours,
         offeredSlots: fromJson<string[]>(t.offeredSlots, []),
         chosenSlot: t.chosenSlot,
         missingInfo: fromJson<string[]>(t.missingInfo, []),

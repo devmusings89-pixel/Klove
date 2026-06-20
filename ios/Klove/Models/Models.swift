@@ -187,18 +187,33 @@ struct CallTarget: Codable, Hashable, Identifiable {
     let attempts: Int           // outbound call attempts placed so far
     let maxAttempts: Int        // the session's call budget
     let nextAttemptAt: String?  // ISO time the next retry is due (status == retry_wait)
+    let callbackHours: String?  // the office's stated hours, captured from a no-answer call
     let result: CallResult?     // latest call
     let results: [CallResult]   // full history (gather + callbacks)
 
     enum CodingKeys: String, CodingKey {
         case id, officeName, phoneNumber, timezone, order, status, channel, website
-        case offeredSlots, chosenSlot, missingInfo, verificationContact, attempts, maxAttempts, nextAttemptAt, result, results
+        case offeredSlots, chosenSlot, missingInfo, verificationContact, attempts, maxAttempts, nextAttemptAt, callbackHours, result, results
     }
 
-    /// Friendly label for a backed-off retry, e.g. "No answer — retrying (2 of 3)".
+    /// Friendly label for a backed-off retry, e.g. "No answer — retrying (2 of 3), next try Mon 9:00 AM".
     var retryLabel: String {
         let n = max(attempts, 1)
-        return maxAttempts > 0 ? "No answer — retrying (\(n) of \(maxAttempts))" : "No answer — retrying"
+        var s = maxAttempts > 0 ? "No answer — retrying (\(n) of \(maxAttempts))" : "No answer — retrying"
+        if let when = nextAttemptDisplay { s += ", next try \(when)" }
+        return s
+    }
+
+    /// The office's hours + when Klove will call back, e.g. "They're open Mon–Fri 9am–5pm."
+    var callbackHoursDisplay: String? {
+        guard let h = callbackHours, !h.isEmpty else { return nil }
+        return "Office hours: \(h)."
+    }
+
+    private var nextAttemptDisplay: String? {
+        guard let s = nextAttemptAt, let d = ISO8601DateFormatter().date(from: s) else { return nil }
+        let f = DateFormatter(); f.dateFormat = "EEE h:mm a"
+        return f.string(from: d)
     }
 
     // Defensive decoding: a single null/missing field must never blank out the whole call card.
@@ -220,6 +235,7 @@ struct CallTarget: Codable, Hashable, Identifiable {
         attempts = (try? c.decode(Int.self, forKey: .attempts)) ?? 0
         maxAttempts = (try? c.decode(Int.self, forKey: .maxAttempts)) ?? 0
         nextAttemptAt = try? c.decodeIfPresent(String.self, forKey: .nextAttemptAt)
+        callbackHours = try? c.decodeIfPresent(String.self, forKey: .callbackHours)
         result = try? c.decodeIfPresent(CallResult.self, forKey: .result)
         results = (try? c.decode([CallResult].self, forKey: .results)) ?? []
     }

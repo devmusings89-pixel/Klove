@@ -467,6 +467,7 @@ model CallTarget {
   calledAt            DateTime? // when the outbound attempt was placed (for stuck-call reaping)
   attempts            Int          @default(0) // outbound call attempts placed (for bounded auto-retry on no-answer)
   nextAttemptAt       DateTime? // when a retry_wait target becomes eligible to re-dial (backoff)
+  callbackHours       String? // the office's stated callback/open hours captured from a no-answer call (e.g. "Mon–Fri 9am–5pm")
   offeredSlots        String? // JSON array of slot strings collected in gather mode
   chosenSlot          String? // the slot the patient picked
   missingInfo         String? // JSON array of info the office required that we couldn't provide

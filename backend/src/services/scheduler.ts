@@ -29,16 +29,40 @@ export function isWithinBusinessHours(timezone: string, date: Date = new Date())
   return withinHours(timezone, date);
 }
 
+const DEFAULT_DAYS = ["mon", "tue", "wed", "thu", "fri"];
+
+/** Is `date` within a custom open–close window on the given days, in the timezone? */
+function withinWindow(timezone: string, date: Date, openHour: number, closeHour: number, days: string[]): boolean {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: timezone, weekday: "short", hour: "numeric", hour12: false }).formatToParts(date);
+  const weekday = (parts.find((p) => p.type === "weekday")?.value ?? "").slice(0, 3).toLowerCase();
+  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? "0") % 24;
+  return days.includes(weekday) && hour >= openHour && hour < closeHour;
+}
+
 /**
- * The first instant at/after `from` that's within the office's business hours, in its timezone. Used to
- * schedule call retries so we never re-dial an office while it's closed (e.g. a no-answer at 9pm waits
- * until the next morning rather than retrying at 9:15pm). Steps in 15-min increments, capped at ~8 days.
+ * The first instant at/after `from` that falls within the given open hours/days, in the office's
+ * timezone — so a retry is never placed while the office is closed. Defaults to Mon–Fri 9–17 when the
+ * office's specific hours aren't known. Steps in 15-min increments, capped at ~8 days.
  */
-export function nextBusinessStart(timezone: string, from: Date = new Date()): Date {
+export function nextWithinHours(
+  timezone: string,
+  from: Date = new Date(),
+  openHour: number = BUSINESS_START_HOUR,
+  closeHour: number = BUSINESS_END_HOUR,
+  days: string[] = DEFAULT_DAYS,
+): Date {
+  const dayset = (days.length ? days : DEFAULT_DAYS).map((d) => d.slice(0, 3).toLowerCase());
+  const open = Number.isFinite(openHour) ? openHour : BUSINESS_START_HOUR;
+  const close = Number.isFinite(closeHour) && closeHour > open ? closeHour : BUSINESS_END_HOUR;
   const d = new Date(from);
   for (let i = 0; i < 8 * 24 * 4; i++) {
-    if (withinHours(timezone, d)) return d;
+    if (withinWindow(timezone, d, open, close, dayset)) return d;
     d.setMinutes(d.getMinutes() + 15);
   }
   return d;
+}
+
+/** Back-compat: next standard business-hours start (Mon–Fri 9–17). */
+export function nextBusinessStart(timezone: string, from: Date = new Date()): Date {
+  return nextWithinHours(timezone, from);
 }

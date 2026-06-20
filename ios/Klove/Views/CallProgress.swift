@@ -191,8 +191,13 @@ struct OfficeRow: View {
             }
 
             if target.status == "retry_wait" {
-                Label("\(target.retryLabel) — they didn't pick up; Klove will call again shortly.", systemImage: "arrow.clockwise")
-                    .font(.caption).foregroundStyle(Theme.needsYou)
+                VStack(alignment: .leading, spacing: 2) {
+                    Label(target.retryLabel, systemImage: "arrow.clockwise")
+                        .font(.caption).foregroundStyle(Theme.needsYou)
+                    if let hours = target.callbackHoursDisplay {
+                        Text(hours).font(.caption2).foregroundStyle(Theme.inkSecondary)
+                    }
+                }
             }
 
             if let summary = target.result?.summary, !summary.isEmpty {
