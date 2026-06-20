@@ -5,24 +5,25 @@ import SwiftUI
 /// unconfirmed against the patient's insurance. From a result you can book or save it to the directory.
 struct PhysicianSearchView: View {
     var allowMemberChange = false
+    /// When set, the view is in *selection mode*: a tapped specialist's detail offers "Use this
+    /// provider", which returns the chosen provider here instead of opening a nested booking sheet.
+    var onPick: ((PickedProvider) -> Void)? = nil
 
     @Environment(HouseholdStore.self) private var store
     @Environment(\.dismiss) private var dismiss
-    private let caps = CapabilityStore.shared
     @State private var model: PhysicianSearchModel
 
-    init(memberId: String, memberName: String, allowMemberChange: Bool = false) {
+    init(memberId: String, memberName: String, allowMemberChange: Bool = false,
+         onPick: ((PickedProvider) -> Void)? = nil) {
         _model = State(initialValue: PhysicianSearchModel(memberId: memberId, memberName: memberName))
         self.allowMemberChange = allowMemberChange
+        self.onPick = onPick
     }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
-                    if !caps.physicianSearchLive {
-                        SimulatedBadge(note: "Results are sample specialists, not the live NPI registry.")
-                    }
                     searchControls
                     if model.searching {
                         ProgressView("Finding specialists…").frame(maxWidth: .infinity).padding(.top, 40)
@@ -43,7 +44,7 @@ struct PhysicianSearchView: View {
                 Button("OK", role: .cancel) {}
             } message: { Text(model.errorMessage ?? "") }
             .navigationDestination(for: PhysicianResult.self) { p in
-                PhysicianDetailView(result: p, model: model).environment(store)
+                PhysicianDetailView(result: p, model: model, onPick: onPick).environment(store)
             }
         }
     }
@@ -239,6 +240,9 @@ struct PhysicianSearchView: View {
 struct PhysicianDetailView: View {
     let result: PhysicianResult
     let model: PhysicianSearchModel
+    /// In selection mode (set by the booking provider picker), the primary CTA returns this specialist
+    /// as a chosen provider instead of opening a nested booking sheet.
+    var onPick: ((PickedProvider) -> Void)? = nil
 
     @Environment(HouseholdStore.self) private var store
     @State private var detail: PhysicianDetail?
@@ -293,11 +297,23 @@ struct PhysicianDetailView: View {
         }
     }
 
+    @ViewBuilder
     private var bookCTA: some View {
-        Button { showBook = true } label: {
-            Label("Klove Book an appointment", systemImage: "calendar.badge.plus")
+        if let onPick {
+            Button {
+                onPick(PickedProvider(name: result.name, phone: result.phone, website: result.website,
+                                      specialty: model.resolvedSpecialty ?? result.specialty,
+                                      address: result.address, npi: result.npi))
+            } label: {
+                Label("Use this provider", systemImage: "checkmark.circle.fill")
+            }
+            .buttonStyle(KlovePrimaryButtonStyle())
+        } else {
+            Button { showBook = true } label: {
+                Label("Klove Book an appointment", systemImage: "calendar.badge.plus")
+            }
+            .buttonStyle(KlovePrimaryButtonStyle())
         }
-        .buttonStyle(KlovePrimaryButtonStyle())
     }
 
     @ViewBuilder

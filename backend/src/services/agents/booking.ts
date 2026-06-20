@@ -157,7 +157,14 @@ export const bookingAgent: Subagent = {
           ? { name: resolved.fromPlaces.displayName, phone: resolved.fromPlaces.phone ?? undefined, website: resolved.fromPlaces.website ?? undefined, address: resolved.fromPlaces.address ?? undefined }
           : null;
       if (!hit) {
-        return { kind: "reply", text: `I couldn't find an office for "${provider || reason}". What's the office name, or a phone number to reach them?` };
+        // No saved provider and the user didn't name a specific office — never auto-pick whatever a
+        // search ranks first. Ask for the office, or point them to the app's specialist finder.
+        return {
+          kind: "reply",
+          text: provider
+            ? `I couldn't find an office for "${provider}". What's the office name, or a phone number to reach them?`
+            : `Which office should I call for ${reason}? Tell me the office name or a phone number — or use "Find a specialist" in the Klove app to pick one, and I'll book it.`,
+        };
       }
       office = hit;
     }

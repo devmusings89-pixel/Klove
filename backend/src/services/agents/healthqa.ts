@@ -25,14 +25,21 @@ export const healthQaAgent: Subagent = {
     const context = (await Promise.all(ctx.members.slice(0, 4).map(memberContext))).join("\n");
     const prefs = ctx.memory.length ? `\n\nRemembered about them: ${ctx.memory.join("; ")}` : "";
 
+    // In-flight + recent bookings (which office Klove is contacting or has booked), so questions like
+    // "what center am I booking with?" / "how did you pick that office?" are answerable no matter which
+    // surface started the booking. The office is one the caregiver picked, so attribute it as their choice.
+    const activity = ctx.activity?.trim() ? `\n\nActive & recent bookings (offices the caregiver chose):\n${ctx.activity}` : "";
+
     let answer: string | null = null;
     try {
       answer = await runText({
         system:
           `${BASE_SYSTEM}\nAnswer the caregiver's question using ONLY the records below. When they ask about a lab or vital, ` +
           `state the most recent value, whether it's flagged out of range, and the direction of any trend across the dates shown. ` +
-          `Keep it to a couple of sentences. If the records genuinely don't contain it, say so plainly.`,
-        content: `Records:\n${context}\n\nConversation so far:\n${formatHistory(ctx.history)}${prefs}\n\nQuestion: ${ctx.text}`,
+          `When they ask about an appointment in progress (which office, how it was chosen, its status), answer from the bookings ` +
+          `list — the office shown is the one THEY selected, so say so plainly; never claim you haven't selected anything if a ` +
+          `booking is listed. Keep it to a couple of sentences. If the records genuinely don't contain it, say so plainly.`,
+        content: `Records:\n${context}${activity}\n\nConversation so far:\n${formatHistory(ctx.history)}${prefs}\n\nQuestion: ${ctx.text}`,
         maxTokens: 500,
       });
     } catch (err) {

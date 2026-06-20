@@ -13,9 +13,6 @@ struct BookAppointmentView: View {
     @State private var memberId: String
     @State private var memberName: String
     @State private var reason: String
-    @State private var provider = ""
-    @State private var phone = ""
-    @State private var website = ""
     @State private var preferredTimes = ""
     @State private var preparing = false
     @State private var plan: BookingPlan?
@@ -25,13 +22,9 @@ struct BookAppointmentView: View {
     @State private var errorMessage: String?
     @State private var cards: [InsuranceCard] = []
     @State private var selectedCardId: String?
-    @State private var officeMatch: OfficeMatch?
-    @State private var lookingUp = false
-    @State private var lookupTask: Task<Void, Never>?
-    // The exact phone/website we auto-filled from a matched office, so we can tell an untouched
-    // auto-fill (safe to replace when the office changes) from a value the user typed themselves.
-    @State private var autofilledPhone: String?
-    @State private var autofilledWebsite: String?
+    // The provider/office chosen via the picker (directory, specialist finder, or manual add). Carries
+    // the exact phone/website so booking reaches THIS office — never a re-resolved random place.
+    @State private var selectedProvider: PickedProvider?
     @State private var showAddInsurance = false
     private let api = APIClient()
 
@@ -41,12 +34,14 @@ struct BookAppointmentView: View {
         _memberId = State(initialValue: memberId)
         _memberName = State(initialValue: memberName)
         _reason = State(initialValue: initialReason)
-        _provider = State(initialValue: initialProvider)
-        _phone = State(initialValue: initialPhone)
-        _website = State(initialValue: initialWebsite)
-        // Treat prefilled contact as auto-filled so the office-lookup logic can still refine it.
-        _autofilledPhone = State(initialValue: initialPhone.isEmpty ? nil : initialPhone)
-        _autofilledWebsite = State(initialValue: initialWebsite.isEmpty ? nil : initialWebsite)
+        // A provider prefilled from physician search becomes the confirmed selection up front.
+        if !initialProvider.isEmpty {
+            _selectedProvider = State(initialValue: PickedProvider(
+                name: initialProvider,
+                phone: initialPhone.isEmpty ? nil : initialPhone,
+                website: initialWebsite.isEmpty ? nil : initialWebsite,
+                specialty: initialReason.isEmpty ? nil : initialReason))
+        }
         self.allowMemberChange = allowMemberChange
         self.onBooked = onBooked
     }
@@ -81,12 +76,11 @@ struct BookAppointmentView: View {
                 }
             }
             .sheet(isPresented: $showProviderPicker) {
-                ProviderPickerView(memberId: memberId) { picked in
-                    provider = picked.name
-                    phone = picked.phone ?? ""
-                    website = picked.website ?? ""
+                ProviderPickerView(memberId: memberId, memberName: memberName) { picked in
+                    selectedProvider = picked
                     plan = nil // back to the form with the chosen provider filled in
                 }
+                .environment(store)
             }
         }
     }
@@ -139,38 +133,32 @@ struct BookAppointmentView: View {
                 TextField("e.g. Annual physical, dermatology", text: $reason)
             }
             Section {
-                TextField("e.g. Dr. Lin, City Endocrinology", text: $provider)
-                    .textInputAutocapitalization(.words)
-                    .onChange(of: provider) { _, new in scheduleLookup(new) }
-                if lookingUp {
-                    Label("Looking up the office…", systemImage: "magnifyingglass")
-                        .font(.caption).foregroundStyle(Theme.inkSecondary)
-                } else if let m = officeMatch {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Label("Found \(m.displayName)", systemImage: "checkmark.circle.fill")
-                            .font(.caption.weight(.semibold)).foregroundStyle(Theme.handled)
-                        if let phone = m.phone { Text(phone).font(.caption2).foregroundStyle(Theme.inkSecondary) }
-                        if let address = m.address { Text(address).font(.caption2).foregroundStyle(Theme.inkSecondary) }
+                if let p = selectedProvider {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label(p.name, systemImage: "stethoscope")
+                            .font(.subheadline.weight(.medium)).foregroundStyle(Theme.ink)
+                        if let ph = p.phone, !ph.isEmpty { Label(ph, systemImage: "phone").font(.caption2).foregroundStyle(Theme.inkSecondary) }
+                        if let web = p.website, !web.isEmpty { Label(web, systemImage: "globe").font(.caption2).foregroundStyle(Theme.inkSecondary).lineLimit(1) }
+                        if let addr = p.address, !addr.isEmpty { Label(addr, systemImage: "mappin.and.ellipse").font(.caption2).foregroundStyle(Theme.inkSecondary) }
                     }
-                } else if !phone.isEmpty || !website.isEmpty {
-                    // We already have a way to reach this office (prefilled from search, or typed).
-                    Label("Klove has this office's contact details.", systemImage: "checkmark.circle.fill")
-                        .font(.caption.weight(.semibold)).foregroundStyle(Theme.handled)
-                } else if provider.trimmingCharacters(in: .whitespaces).count >= 3 {
-                    Label("Couldn't find that office — add a phone or website below so Klove can reach it.",
-                          systemImage: "questionmark.circle")
-                        .font(.caption).foregroundStyle(Theme.needsYou)
+                    HStack {
+                        Button("Change") { showProviderPicker = true }.tint(Theme.accent)
+                        Spacer()
+                        Button("Remove", role: .destructive) { selectedProvider = nil }
+                    }
+                    .font(.caption)
+                } else {
+                    Button { showProviderPicker = true } label: {
+                        Label("Choose a provider", systemImage: "magnifyingglass")
+                    }
+                    .tint(Theme.accent)
                 }
             } header: {
-                Text("Provider or office (optional)")
-            }
-            Section {
-                TextField("Office phone", text: $phone).keyboardType(.phonePad)
-                TextField("Booking website", text: $website).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-            } header: {
-                Text("How should Klove reach the office?")
+                Text("Provider or office")
             } footer: {
-                Text("Optional — Klove can find the office from its name. Add a phone or website to be exact.")
+                Text(selectedProvider == nil
+                     ? "Pick a saved provider, search by name, or find a specialist for \(reason.isEmpty ? "the visit" : reason). Klove reaches this exact office — no guessing."
+                     : "Klove will contact this office to book on \(memberName)'s behalf.")
             }
             Section {
                 TextField("e.g. weekday mornings, after 3pm, ASAP", text: $preferredTimes, axis: .vertical)
@@ -314,10 +302,11 @@ struct BookAppointmentView: View {
             plan = try await api.prepareBooking(
                 memberId,
                 reason: reason.trimmingCharacters(in: .whitespaces),
-                provider: provider.isEmpty ? nil : provider,
+                provider: selectedProvider?.name,
+                specialty: selectedProvider?.specialty,
                 preferredTimes: preferredTimes.isEmpty ? nil : preferredTimes,
-                phone: phone.isEmpty ? nil : phone,
-                website: website.isEmpty ? nil : website,
+                phone: selectedProvider?.phone,
+                website: selectedProvider?.website,
                 insurancePlanId: selectedCardId
             )
         } catch {
@@ -335,52 +324,17 @@ struct BookAppointmentView: View {
             outcome = try await api.bookForMember(
                 memberId,
                 reason: reason.trimmingCharacters(in: .whitespaces),
-                provider: prov?.name ?? (provider.isEmpty ? nil : provider),
-                specialty: prov?.specialty,
+                provider: prov?.name ?? selectedProvider?.name,
+                specialty: prov?.specialty ?? selectedProvider?.specialty,
                 preferredTimes: preferredTimes.isEmpty ? nil : preferredTimes,
-                phone: prov?.phone ?? (phone.isEmpty ? nil : phone),
-                website: prov?.website ?? (website.isEmpty ? nil : website),
+                phone: prov?.phone ?? selectedProvider?.phone,
+                website: prov?.website ?? selectedProvider?.website,
                 insurancePlanId: selectedCardId
             )
             store.bumpData()   // refresh Today/Actions so the booking shows up
             onBooked()
         } catch {
             errorMessage = (error as? AppError)?.errorDescription ?? error.localizedDescription
-        }
-    }
-
-    /// Debounce office lookups as the user types so we don't fire a request per keystroke.
-    private func scheduleLookup(_ raw: String) {
-        lookupTask?.cancel()
-        let query = raw.trimmingCharacters(in: .whitespaces)
-        officeMatch = nil
-        // Drop a previous office's auto-filled contact info so a newly matched office can repopulate
-        // it — but only if the user hasn't since edited it by hand.
-        if let p = autofilledPhone, phone == p { phone = "" }
-        if let w = autofilledWebsite, website == w { website = "" }
-        autofilledPhone = nil
-        autofilledWebsite = nil
-        guard query.count >= 3 else { lookingUp = false; return }
-        lookingUp = true
-        lookupTask = Task {
-            try? await Task.sleep(for: .milliseconds(450))
-            if Task.isCancelled { return }
-            let match = try? await api.lookupOffice(query)
-            if Task.isCancelled { return }
-            officeMatch = match
-            lookingUp = false
-            // Fill the office phone/website from the match so Klove reaches the exact office —
-            // without overwriting anything the user typed themselves.
-            if let match {
-                if phone.trimmingCharacters(in: .whitespaces).isEmpty, let p = match.phone, !p.isEmpty {
-                    phone = p
-                    autofilledPhone = p
-                }
-                if website.trimmingCharacters(in: .whitespaces).isEmpty, let w = match.website, !w.isEmpty {
-                    website = w
-                    autofilledWebsite = w
-                }
-            }
         }
     }
 

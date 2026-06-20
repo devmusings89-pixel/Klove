@@ -24,6 +24,10 @@ export interface AgentContext {
   history: { role: "user" | "assistant"; content: string }[];
   /** Durable cross-session preferences/facts the agent remembers about this caregiver. */
   memory: string[];
+  /** Compact, household-wide summary of in-flight + recently-resolved bookings (the office Klove is
+   *  contacting or has booked), so the agent answers cross-flow questions consistently no matter which
+   *  surface — app booking form, WhatsApp, or Ask Klove — started the booking. Empty string when none. */
+  activity: string;
 }
 
 /**

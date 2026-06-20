@@ -1,20 +1,25 @@
 import SwiftUI
 
-/// A provider chosen for a booking (from the directory, Places search, or a manual add).
+/// A provider chosen for a booking (from the directory, Places search, the specialist finder, or a
+/// manual add). Carries enough to reach the *exact* office (phone/website) so booking never re-resolves.
 struct PickedProvider {
     let name: String
     let phone: String?
     let website: String?
     let specialty: String?
+    var address: String? = nil
+    var npi: String? = nil
 }
 
-/// Search the known-provider directory + Google Places and pick a provider for a booking, or add a new
-/// one. Returns the chosen provider to the caller via `onPick`.
+/// Search the known-provider directory + Google Places and pick a provider for a booking, run the full
+/// specialist finder, or add a new one. Returns the chosen provider to the caller via `onPick`.
 struct ProviderPickerView: View {
     let memberId: String
+    let memberName: String
     var onPick: (PickedProvider) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(HouseholdStore.self) private var store
     @State private var query = ""
     @State private var directory: [DirectoryProvider] = []
     @State private var places: [OfficeMatch] = []
@@ -24,6 +29,7 @@ struct ProviderPickerView: View {
     @State private var addPhone = ""
     @State private var addWebsite = ""
     @State private var saving = false
+    @State private var showSpecialistSearch = false
     private let api = APIClient()
 
     var body: some View {
@@ -33,6 +39,14 @@ struct ProviderPickerView: View {
                     TextField("Search providers or offices", text: $query)
                         .onChange(of: query) { _, q in scheduleSearch(q) }
                     if loading { Label("Searching…", systemImage: "magnifyingglass").font(.caption).foregroundStyle(.secondary) }
+                }
+                Section {
+                    Button { showSpecialistSearch = true } label: {
+                        Label("Find a specialist", systemImage: "stethoscope")
+                    }
+                    .tint(Theme.accent)
+                } footer: {
+                    Text("Describe a condition and Klove finds the right expert — ranked by credentials, ratings, and your insurance.")
                 }
                 if !directory.isEmpty {
                     Section("Your providers") {
@@ -65,6 +79,16 @@ struct ProviderPickerView: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
             .tint(Theme.accent)
             .task { await initialLoad() }
+            .sheet(isPresented: $showSpecialistSearch) {
+                // Reuse the full specialist finder in selection mode: a pick returns the structured
+                // provider straight back to the booking form (no nested booking sheet).
+                PhysicianSearchView(memberId: memberId, memberName: memberName) { picked in
+                    showSpecialistSearch = false
+                    onPick(picked)
+                    dismiss()
+                }
+                .environment(store)
+            }
         }
     }
 

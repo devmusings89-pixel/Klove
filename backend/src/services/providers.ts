@@ -70,8 +70,11 @@ export async function resolveProvider(input: ResolveProviderInput): Promise<Prov
   });
   if (candidates.length) return { provider: candidates[0], candidates, source: "directory" };
 
-  // Directory miss → look the office up via Places (by named office, else specialty/reason).
-  const base = (input.providerHint || input.specialty || input.reason || "").trim();
+  // Directory miss → look the office up via Places ONLY when the user named a specific office/doctor.
+  // A bare specialty/reason ("botox for migraines") must NOT auto-resolve to whatever Places ranks
+  // first — that produces a random clinic the user never chose. In that case return "none" so the
+  // caller asks the user to pick a provider (app: needs_provider recap; agent: "what's the office?").
+  const base = (input.providerHint || "").trim();
   if (base) {
     const query = input.location ? `${base} near ${input.location}` : base;
     const matches = await searchOffices(query);

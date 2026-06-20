@@ -64,7 +64,11 @@ export async function handleInboundMessage(user: InboundUser, rawText: string): 
   const householdId = await ensureHousehold(user.id);
   const members = await accessibleSubjects(user.id);
   const convo = await getOrCreateConversation(user.id, householdId);
-  const [history, memory] = await Promise.all([loadHistory(householdId, user.id), loadMemory(user.id)]);
+  const [history, memory, activity] = await Promise.all([
+    loadHistory(householdId, user.id),
+    loadMemory(user.id),
+    loadBookingActivity(householdId, members),
+  ]);
   await saveMessage(householdId, user.id, "in", text);
 
   // ---- Confirm-before-execute gate (deterministic, pre-LLM). ----
@@ -85,7 +89,7 @@ export async function handleInboundMessage(user: InboundUser, rawText: string): 
   }
 
   // ---- Route to a specialist subagent. ----
-  const ctx: AgentContext = { operatorUserId: user.id, householdId, members, text, history, memory };
+  const ctx: AgentContext = { operatorUserId: user.id, householdId, members, text, history, memory, activity };
   let reply: string;
   let route: Route | null = null;
   try {
@@ -152,8 +156,13 @@ export interface AskResult {
  */
 export async function askKlove(operatorUserId: string, text: string): Promise<AskResult> {
   const householdId = await ensureHousehold(operatorUserId);
-  const [members, memory] = await Promise.all([accessibleSubjects(operatorUserId), loadMemory(operatorUserId)]);
-  const ctx: AgentContext = { operatorUserId, householdId, members, text: text.trim(), history: [], memory };
+  const members = await accessibleSubjects(operatorUserId);
+  const [memory, history, activity] = await Promise.all([
+    loadMemory(operatorUserId),
+    loadAskHistory(operatorUserId),
+    loadBookingActivity(householdId, members),
+  ]);
+  const ctx: AgentContext = { operatorUserId, householdId, members, text: text.trim(), history, memory, activity };
 
   let routed;
   try {
@@ -326,4 +335,74 @@ async function loadHistory(householdId: string, userId: string): Promise<{ role:
 
 async function saveMessage(householdId: string, userId: string, direction: "in" | "out", body: string): Promise<void> {
   await prisma.message.create({ data: { householdId, subjectUserId: userId, direction, channel: "whatsapp", body } });
+}
+
+/**
+ * Prior in-app "Ask Klove" turns (oldest first), reconstructed from the Request rows /ask already
+ * persists (text = the user's ask, responseJson = the AskResult). Without this the in-app agent ran
+ * stateless and forgot its own previous answer ("How did you select that center?" → "I haven't selected
+ * any center yet"). The current turn's Request is written AFTER askKlove returns, so this is prior turns
+ * only — exactly the history we want.
+ */
+async function loadAskHistory(operatorUserId: string): Promise<{ role: "user" | "assistant"; content: string }[]> {
+  const rows = await prisma.request.findMany({
+    where: { operatorUserId, kind: "ask" },
+    orderBy: { createdAt: "desc" },
+    take: 10,
+    select: { text: true, responseJson: true },
+  });
+  const turns: { role: "user" | "assistant"; content: string }[] = [];
+  for (const r of rows.reverse()) {
+    if (r.text?.trim()) turns.push({ role: "user", content: r.text.trim() });
+    const answer = fromJson<{ answer?: string } | null>(r.responseJson, null)?.answer?.trim();
+    if (answer) turns.push({ role: "assistant", content: answer });
+  }
+  return turns;
+}
+
+/**
+ * A compact, household-wide summary of in-flight + recently-resolved bookings (the office Klove is
+ * contacting, or has booked), so the agent answers cross-flow questions ("what office am I booking
+ * with?", "how did you pick that center?") consistently — whether the booking started in the app's
+ * booking form, on WhatsApp, or via Ask Klove. The chosen office for an in-flight booking lives on the
+ * linked Session's first CallTarget (no Appointment exists until the call confirms); a booked one is in
+ * Task.bookingJson. Only tasks for members the operator can see are included (respects consent).
+ */
+export async function loadBookingActivity(
+  householdId: string,
+  members: { id: string; name: string }[],
+): Promise<string> {
+  const nameById = new Map(members.map((m) => [m.id, m.name]));
+  const tasks = await prisma.task.findMany({
+    where: { householdId, kind: { in: ["book", "choose_time"] }, subjectUserId: { in: [...nameById.keys()] } },
+    orderBy: { updatedAt: "desc" },
+    take: 6,
+  });
+  if (!tasks.length) return "";
+
+  // Resolve the chosen office for in-flight tasks via the linked Session's first CallTarget.
+  const jobIds = tasks.map((t) => t.conciergeJobId).filter((x): x is string => Boolean(x));
+  const sessions = jobIds.length
+    ? await prisma.session.findMany({
+        where: { id: { in: jobIds } },
+        select: { id: true, targets: { orderBy: { order: "asc" }, take: 1, select: { officeName: true } } },
+      })
+    : [];
+  const officeByJob = new Map(sessions.map((s) => [s.id, s.targets[0]?.officeName ?? null]));
+
+  const lines = tasks.map((t) => {
+    const who = nameById.get(t.subjectUserId) ?? "a family member";
+    const booking = fromJson<{ provider?: string; whenText?: string; confirmation?: string } | null>(t.bookingJson, null);
+    const office = booking?.provider ?? (t.conciergeJobId ? officeByJob.get(t.conciergeJobId) ?? null : null);
+    const state =
+      t.state === "handled" ? "booked" :
+      t.kind === "choose_time" ? "waiting on you to pick a time" :
+      t.state === "waiting" ? "in progress — Klove is contacting the office" :
+      "needs you to finish";
+    const officeText = office ? ` with ${office}` : "";
+    const when = booking?.whenText ? `, ${booking.whenText}` : "";
+    const conf = booking?.confirmation ? ` (confirmation ${booking.confirmation})` : "";
+    return `- "${t.title}" for ${who}${officeText}${when} — ${state}${conf}`;
+  });
+  return lines.join("\n");
 }
