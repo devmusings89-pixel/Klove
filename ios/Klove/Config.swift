@@ -5,7 +5,20 @@ import Security
 /// environment via the Info.plist key `API_BASE_URL` (e.g. `http://localhost:8080` for local dev,
 /// from a gitignored xcconfig) — otherwise it uses the production endpoint below.
 enum Config {
+    /// DEBUG-only launch-env override (used by the E2E QA harness to point the app at a local mock
+    /// backend and disable Supabase so the dev `x-user-email` identity is accepted). Presence of the
+    /// env var wins — even an empty value, which is how the harness *disables* Supabase. Release builds
+    /// ignore this entirely.
+    private static func envOverride(_ key: String) -> String? {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment[key]
+        #else
+        return nil
+        #endif
+    }
+
     static var apiBaseURL: URL {
+        if let env = envOverride("API_BASE_URL"), !env.isEmpty, let u = URL(string: env) { return u }
         let override = infoPlistString("API_BASE_URL")
         return URL(string: override.isEmpty ? defaultApiBaseURL : override)!
     }
@@ -29,10 +42,12 @@ enum Config {
     ///   <key>SUPABASE_URL</key><string>$(SUPABASE_URL)</string>
     ///   <key>SUPABASE_ANON_KEY</key><string>$(SUPABASE_ANON_KEY)</string>
     static var supabaseURL: String {
+        if let env = envOverride("SUPABASE_URL") { return env }   // present (even "") wins → "" disables Supabase
         let override = infoPlistString("SUPABASE_URL")
         return override.isEmpty ? defaultSupabaseURL : override
     }
     static var supabaseAnonKey: String {
+        if let env = envOverride("SUPABASE_ANON_KEY") { return env }
         let override = infoPlistString("SUPABASE_ANON_KEY")
         return override.isEmpty ? defaultSupabaseAnonKey : override
     }

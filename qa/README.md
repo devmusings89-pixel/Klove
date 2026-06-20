@@ -77,6 +77,36 @@ The orchestrator (main session) can fan these out and then collate a summary acr
 
 **Reset between runs:** rerun `npm run seed:e2e` and relaunch (wipe app data for onboarding runs).
 
+## Proven live-run recipe (idb path — no XcodeBuildMCP)
+
+This was driven end-to-end on 2026-06-19 (see `reports/run-2026-06-19.md`). XcodeBuildMCP, if attached,
+is preferred (it can address taps by label/identifier); without it, `idb` works for body content.
+
+1. **Force the local backend to mock** (it ships keys → boots *live*, which is unsafe and breaks the
+   `x-user-email` shortcut). Keep DB + encryption + LLM; blank the rest:
+   ```bash
+   cd backend
+   LIVE_BOOKING=false PHYSICIAN_SEARCH_LIVE=false \
+   VAPI_API_KEY= VAPI_ASSISTANT_ID= VAPI_PHONE_NUMBER_ID= RESEND_API_KEY= GOOGLE_PLACES_API_KEY= STRIPE_SECRET_KEY= \
+   SUPABASE_URL= SUPABASE_JWT_SECRET= SUPABASE_SERVICE_ROLE_KEY= SUPABASE_PUBLISHABLE_KEY= SUPABASE_ANON_KEY= \
+   npm run dev          # verify GET /health → mode.auth == "mock:header", booking/vapi/resend == "mock"
+   npm run seed:e2e
+   ```
+2. **Build + install + launch** on a booted sim (full Xcode via `DEVELOPER_DIR`; bundle id `app.klove.client`).
+   The dev session is injected via launch env — **always relaunch with these or you land on ReAuth:**
+   ```bash
+   xcrun simctl launch --terminate-running-process <UDID> app.klove.client
+   # with: SIMCTL_CHILD_API_BASE_URL=http://localhost:8080 SIMCTL_CHILD_KLOVE_TEST_EMAIL=operator@klove.e2e \
+   #       SIMCTL_CHILD_SUPABASE_URL= SIMCTL_CHILD_SUPABASE_ANON_KEY=
+   ```
+   (`API_BASE_URL`/`SUPABASE_*` are DEBUG launch-env overrides in `Config.swift`; blank Supabase →
+   the app accepts the `x-user-email` identity.)
+3. **Drive with idb** (`idb_companion` from brew + `pip3 install fb-idb`; companion on `:10882`,
+   `idb connect localhost 10882`). Tap by **label or coordinate** — `describe-all` exposes `AXLabel` but
+   **not** `AXIdentifier`, and **omits nav-bar buttons** (Cancel/Review/Confirm live in the toolbar →
+   reach by coordinate, with retries near the Dynamic-Island safe area, or use XcodeBuildMCP). Screenshot
+   with `xcrun simctl io <UDID> screenshot`.
+
 ## Suggested first pass
 
 `A → B2/B4 → C1 → D1–D6 → E2–E4 → F1/F5 → G1/G3` — covers the full
