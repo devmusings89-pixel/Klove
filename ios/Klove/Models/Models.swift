@@ -184,12 +184,21 @@ struct CallTarget: Codable, Hashable, Identifiable {
     let chosenSlot: String?
     let missingInfo: [String]
     let verificationContact: String?   // where the scheduler sent the one-time code
+    let attempts: Int           // outbound call attempts placed so far
+    let maxAttempts: Int        // the session's call budget
+    let nextAttemptAt: String?  // ISO time the next retry is due (status == retry_wait)
     let result: CallResult?     // latest call
     let results: [CallResult]   // full history (gather + callbacks)
 
     enum CodingKeys: String, CodingKey {
         case id, officeName, phoneNumber, timezone, order, status, channel, website
-        case offeredSlots, chosenSlot, missingInfo, verificationContact, result, results
+        case offeredSlots, chosenSlot, missingInfo, verificationContact, attempts, maxAttempts, nextAttemptAt, result, results
+    }
+
+    /// Friendly label for a backed-off retry, e.g. "No answer — retrying (2 of 3)".
+    var retryLabel: String {
+        let n = max(attempts, 1)
+        return maxAttempts > 0 ? "No answer — retrying (\(n) of \(maxAttempts))" : "No answer — retrying"
     }
 
     // Defensive decoding: a single null/missing field must never blank out the whole call card.
@@ -208,6 +217,9 @@ struct CallTarget: Codable, Hashable, Identifiable {
         chosenSlot = try? c.decodeIfPresent(String.self, forKey: .chosenSlot)
         missingInfo = (try? c.decode([String].self, forKey: .missingInfo)) ?? []
         verificationContact = try? c.decodeIfPresent(String.self, forKey: .verificationContact)
+        attempts = (try? c.decode(Int.self, forKey: .attempts)) ?? 0
+        maxAttempts = (try? c.decode(Int.self, forKey: .maxAttempts)) ?? 0
+        nextAttemptAt = try? c.decodeIfPresent(String.self, forKey: .nextAttemptAt)
         result = try? c.decodeIfPresent(CallResult.self, forKey: .result)
         results = (try? c.decode([CallResult].self, forKey: .results)) ?? []
     }

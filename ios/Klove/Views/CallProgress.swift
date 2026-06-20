@@ -190,6 +190,11 @@ struct OfficeRow: View {
                     .font(.caption).foregroundStyle(Theme.handled)
             }
 
+            if target.status == "retry_wait" {
+                Label("\(target.retryLabel) — they didn't pick up; Klove will call again shortly.", systemImage: "arrow.clockwise")
+                    .font(.caption).foregroundStyle(Theme.needsYou)
+            }
+
             if let summary = target.result?.summary, !summary.isEmpty {
                 Text(summary).font(.caption).foregroundStyle(Theme.inkSecondary)
             }
@@ -262,6 +267,7 @@ struct StatusBadge: View {
         case "provisional": return "Provisional"
         case "voicemail": return "Voicemail"
         case "no_answer": return "No answer"
+        case "retry_wait": return "Retrying"
         case "failed": return "Failed"
         default: return "Pending"
         }
@@ -273,7 +279,7 @@ struct StatusBadge: View {
         case "calling", "ringing": return .blue
         case "in_call": return .green
         case "awaiting_choice": return .purple
-        case "awaiting_info", "provisional", "voicemail": return Theme.needsYou
+        case "awaiting_info", "provisional", "voicemail", "retry_wait": return Theme.needsYou
         case "awaiting_verification": return .indigo
         case "requested": return .teal
         case "failed", "no_answer": return .red

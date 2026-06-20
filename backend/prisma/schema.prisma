@@ -459,12 +459,14 @@ model CallTarget {
   website             String? // online booking URL (for the web channel); looked up if absent
   timezone            String       @default("America/New_York")
   order               Int
-  // pending | calling | awaiting_choice | awaiting_info | awaiting_verification | booked | requested | voicemail | failed | no_answer
+  // pending | calling | awaiting_choice | awaiting_info | awaiting_verification | booked | requested | voicemail | failed | no_answer | retry_wait
   status              String       @default("pending")
   channel             String? // channel that handled this target: voice | web | fhir | zocdoc | messaging | fax
   channelHints        String? // JSON: { fhirEndpoint?, zocdocProviderId?, email?, fax? }
   vapiCallId          String?
   calledAt            DateTime? // when the outbound attempt was placed (for stuck-call reaping)
+  attempts            Int          @default(0) // outbound call attempts placed (for bounded auto-retry on no-answer)
+  nextAttemptAt       DateTime? // when a retry_wait target becomes eligible to re-dial (backoff)
   offeredSlots        String? // JSON array of slot strings collected in gather mode
   chosenSlot          String? // the slot the patient picked
   missingInfo         String? // JSON array of info the office required that we couldn't provide

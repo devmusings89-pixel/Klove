@@ -57,7 +57,11 @@ export async function placeNextCall(sessionId: string): Promise<void> {
   if ((await minutesUsed(sessionId)) >= session.minutesCap) return finalizeOrAwaitChoice(sessionId);
 
   const next = session.targets.find((t) => t.status === "pending");
-  if (!next) return finalizeOrAwaitChoice(sessionId);
+  if (!next) {
+    // A backed-off retry is scheduled — wait for the scheduler tick to re-dial it; don't finalize yet.
+    if (session.targets.some((t) => t.status === "retry_wait")) return;
+    return finalizeOrAwaitChoice(sessionId);
+  }
 
   // Defer to the worker if outside business hours (gates all channels for now; off by default).
   if (!isWithinBusinessHours(next.timezone)) {
@@ -70,7 +74,7 @@ export async function placeNextCall(sessionId: string): Promise<void> {
   const patient = fromJson<PatientInfo>(session.patientInfo, EMPTY_PATIENT);
   await prisma.session.update({ where: { id: sessionId }, data: { status: "in_progress" } });
   // Mark in-flight before routing so the worker tick can't double-enter a synchronous (web) run.
-  await prisma.callTarget.update({ where: { id: next.id }, data: { status: "calling", calledAt: new Date() } });
+  await prisma.callTarget.update({ where: { id: next.id }, data: { status: "calling", calledAt: new Date(), attempts: { increment: 1 } } });
 
   const ctx: BookingContext = { target: next, session, patient, mode: "gather" };
   const route = await routeAndAttempt(ctx);
@@ -97,6 +101,29 @@ const STUCK_CALL_TIMEOUT_MS = 15 * 60 * 1000;
  */
 export const ACTIVE_CALL_STATES = ["calling", "ringing", "in_call"];
 
+// Bounded auto-retry: an office that doesn't answer (or hits voicemail) is re-dialed up to the session's
+// maxCalls attempts, with a backoff between tries, before we give up and surface a needs-you task.
+// `attempts` is incremented each time a call is placed (placeNextCall). A waiting retry sits in the
+// "retry_wait" status with nextAttemptAt set; the scheduler tick promotes it back to "pending" when due.
+const RETRY_BACKOFF_MS = Number(process.env.BOOKING_RETRY_BACKOFF_MS) || 15 * 60 * 1000;
+const RETRYABLE_STATUSES = ["no_answer", "voicemail"];
+
+/** Should an unreachable target be retried, given attempts so far and the session's call budget? */
+export function shouldRetry(status: string, attempts: number, maxCalls: number): boolean {
+  return RETRYABLE_STATUSES.includes(status) && attempts < maxCalls;
+}
+
+/** Mark a target unreachable — schedule a backed-off retry if attempts remain, else leave it terminal. */
+async function markUnreachable(targetId: string, status: "no_answer" | "voicemail"): Promise<void> {
+  const t = await prisma.callTarget.findUnique({ where: { id: targetId }, include: { session: true } });
+  if (!t) return;
+  if (shouldRetry(status, t.attempts, t.session.maxCalls)) {
+    await prisma.callTarget.update({ where: { id: targetId }, data: { status: "retry_wait", nextAttemptAt: new Date(Date.now() + RETRY_BACKOFF_MS) } });
+  } else {
+    await prisma.callTarget.update({ where: { id: targetId }, data: { status, nextAttemptAt: null } });
+  }
+}
+
 export async function runSchedulerTick(): Promise<void> {
   const active = await prisma.session.findMany({
     where: { status: { in: ["paid", "scheduling", "in_progress"] } },
@@ -110,8 +137,14 @@ export async function runSchedulerTick(): Promise<void> {
         t.calledAt != null &&
         Date.now() - t.calledAt.getTime() > STUCK_CALL_TIMEOUT_MS,
     );
-    if (stuck) {
-      await prisma.callTarget.update({ where: { id: stuck.id }, data: { status: "no_answer" } });
+    if (stuck) await markUnreachable(stuck.id, "no_answer");
+
+    // Promote any retry whose backoff has elapsed back to pending so placeNextCall re-dials it.
+    const now = Date.now();
+    for (const t of session.targets) {
+      if (t.status === "retry_wait" && t.nextAttemptAt != null && t.nextAttemptAt.getTime() <= now) {
+        await prisma.callTarget.update({ where: { id: t.id }, data: { status: "pending", nextAttemptAt: null } });
+      }
     }
     await placeNextCall(session.id);
   }
@@ -162,11 +195,23 @@ async function persistResult(args: {
       durationSec: args.durationSec,
     },
   });
+  // Bounded auto-retry: a no-answer/voicemail with attempts left becomes a backed-off retry, not terminal.
+  let finalStatus = status;
+  let nextAttemptAt: Date | null = null;
+  if (status === "no_answer" || status === "voicemail") {
+    const t = await prisma.callTarget.findUnique({ where: { id: args.targetId }, include: { session: true } });
+    if (t && shouldRetry(status, t.attempts, t.session.maxCalls)) {
+      finalStatus = "retry_wait";
+      nextAttemptAt = new Date(Date.now() + RETRY_BACKOFF_MS);
+    }
+  }
+
   await prisma.callTarget.update({
     where: { id: args.targetId },
     data: {
-      status,
+      status: finalStatus,
       channel: args.channel,
+      nextAttemptAt,
       offeredSlots: status === "awaiting_choice" ? toJson(sd.offeredSlots) : args.existingOfferedSlots ?? undefined,
       missingInfo: status === "awaiting_info" ? toJson(sd.missingInfo) : args.existingMissingInfo ?? undefined,
     },
@@ -311,6 +356,9 @@ export async function finalizeOrAwaitChoice(sessionId: string): Promise<void> {
     }
     return;
   }
+
+  // A backed-off retry is still scheduled — don't finalize; the scheduler will re-dial after the backoff.
+  if (session.targets.some((t) => t.status === "retry_wait")) return;
 
   return completeSession(sessionId);
 }
