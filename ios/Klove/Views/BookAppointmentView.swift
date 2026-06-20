@@ -134,19 +134,19 @@ struct BookAppointmentView: View {
             }
             Section {
                 if let p = selectedProvider {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                         Label(p.name, systemImage: "stethoscope")
-                            .font(.subheadline.weight(.medium)).foregroundStyle(Theme.ink)
-                        if let ph = p.phone, !ph.isEmpty { Label(ph, systemImage: "phone").font(.caption2).foregroundStyle(Theme.inkSecondary) }
-                        if let web = p.website, !web.isEmpty { Label(web, systemImage: "globe").font(.caption2).foregroundStyle(Theme.inkSecondary).lineLimit(1) }
-                        if let addr = p.address, !addr.isEmpty { Label(addr, systemImage: "mappin.and.ellipse").font(.caption2).foregroundStyle(Theme.inkSecondary) }
+                            .font(.kloveBodyStrong).foregroundStyle(Theme.ink)
+                        if let ph = p.phone, !ph.isEmpty { Label(ph, systemImage: "phone").font(.kloveCaption).foregroundStyle(Theme.inkSecondary) }
+                        if let web = p.website, !web.isEmpty { Label(web, systemImage: "globe").font(.kloveCaption).foregroundStyle(Theme.inkSecondary).lineLimit(1) }
+                        if let addr = p.address, !addr.isEmpty { Label(addr, systemImage: "mappin.and.ellipse").font(.kloveCaption).foregroundStyle(Theme.inkSecondary) }
                     }
                     HStack {
                         Button("Change") { showProviderPicker = true }.tint(Theme.accent)
                         Spacer()
                         Button("Remove", role: .destructive) { selectedProvider = nil }
                     }
-                    .font(.caption)
+                    .font(.kloveCaption)
                 } else {
                     Button { showProviderPicker = true } label: {
                         Label("Choose a provider", systemImage: "magnifyingglass")
@@ -169,6 +169,8 @@ struct BookAppointmentView: View {
                 Text("In your own words. Klove will reach the office on \(memberName)'s behalf and find a time that fits.")
             }
         }
+        .scrollContentBackground(.hidden)
+        .kloveBackground()
     }
 
     // The confirm step: a recap of exactly what Klove will do before any calls are placed. When no
@@ -177,16 +179,18 @@ struct BookAppointmentView: View {
     @ViewBuilder
     private func recap(_ p: BookingPlan) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text(p.isReady ? "Confirm the details" : "Pick a provider")
-                    .font(.title3.weight(.semibold)).foregroundStyle(Theme.ink)
-                Text(p.recap).font(.subheadline).foregroundStyle(Theme.inkSecondary)
+            VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                    Text(p.isReady ? "Confirm the details" : "Pick a provider")
+                        .font(.kloveSerifHeading).foregroundStyle(Theme.ink)
+                    Text(p.recap).font(.kloveBody).foregroundStyle(Theme.inkSecondary)
+                }
 
                 recapDetails(p)
 
                 if !p.missing.isEmpty {
                     Text("Klove will proceed without \(p.missing.joined(separator: ", ")). Add it for a smoother call.")
-                        .font(.caption).foregroundStyle(Theme.needsYou)
+                        .font(.kloveCaption).foregroundStyle(Theme.needsYou)
                 }
 
                 if p.isReady {
@@ -198,46 +202,52 @@ struct BookAppointmentView: View {
                     recapCandidates(p)
                 }
 
-                Button("Edit details") { plan = nil }.font(.caption).tint(Theme.accent)
+                Button("Edit details") { plan = nil }.font(.kloveCaption).tint(Theme.accent)
             }
-            .padding(20)
+            .padding(Theme.Spacing.xl)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Theme.background.ignoresSafeArea())
+        .kloveBackground()
     }
 
     @ViewBuilder
     private func recapDetails(_ p: BookingPlan) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            SectionLabel(title: "The visit")
             if let prov = p.provider {
-                Label(prov.name, systemImage: "stethoscope").font(.subheadline.weight(.medium)).foregroundStyle(Theme.ink)
-                if let ph = prov.phone, !ph.isEmpty { Label(ph, systemImage: "phone").font(.caption).foregroundStyle(Theme.inkSecondary) }
-                if let web = prov.website, !web.isEmpty { Label(web, systemImage: "globe").font(.caption).foregroundStyle(Theme.inkSecondary) }
+                Label(prov.name, systemImage: "stethoscope").font(.kloveBodyStrong).foregroundStyle(Theme.ink)
+                if let ph = prov.phone, !ph.isEmpty { detailRow(ph, "phone") }
+                if let web = prov.website, !web.isEmpty { detailRow(web, "globe") }
             }
-            Label("For \(p.patientName)", systemImage: "person.fill").font(.caption).foregroundStyle(Theme.inkSecondary)
-            if !p.insuranceLabel.isEmpty { Label("Insurance: \(p.insuranceLabel)", systemImage: "creditcard").font(.caption).foregroundStyle(Theme.inkSecondary) }
-            if !p.preferredTimes.isEmpty { Label(p.preferredTimes, systemImage: "clock").font(.caption).foregroundStyle(Theme.inkSecondary) }
+            detailRow("For \(p.patientName)", "person.fill")
+            if !p.insuranceLabel.isEmpty { detailRow("Insurance: \(p.insuranceLabel)", "creditcard") }
+            if !p.preferredTimes.isEmpty { detailRow(p.preferredTimes, "clock") }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .kloveCard()
     }
 
+    private func detailRow(_ text: String, _ icon: String) -> some View {
+        Label(text, systemImage: icon).font(.kloveCaption).foregroundStyle(Theme.inkSecondary)
+    }
+
     @ViewBuilder
     private func recapCandidates(_ p: BookingPlan) -> some View {
         Text("Klove doesn't have a way to reach an office yet. Pick a known provider or add one:")
-            .font(.subheadline).foregroundStyle(Theme.ink)
+            .font(.kloveBody).foregroundStyle(Theme.ink)
         ForEach(p.candidates) { c in
             Button { Task { await book(p, chosen: c) } } label: {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(c.name).foregroundStyle(Theme.ink)
-                        if let ph = c.phone, !ph.isEmpty { Text(ph).font(.caption2).foregroundStyle(Theme.inkSecondary) }
+                        Text(c.name).font(.kloveBodyStrong).foregroundStyle(Theme.ink)
+                        if let ph = c.phone, !ph.isEmpty { Text(ph).font(.kloveCaption).foregroundStyle(Theme.inkSecondary) }
                     }
                     Spacer()
-                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(Theme.inkSecondary)
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.inkSecondary)
                 }
-                .padding(.vertical, 10).padding(.horizontal, 12)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+                .padding(.vertical, Theme.Spacing.md).padding(.horizontal, Theme.Spacing.lg)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous).stroke(Theme.hairline, lineWidth: 1))
             }
             .disabled(booking)
         }
@@ -250,38 +260,38 @@ struct BookAppointmentView: View {
     @ViewBuilder
     private func confirmation(_ o: BookingOutcome) -> some View {
         ScrollView {
-            VStack(spacing: 14) {
+            VStack(spacing: Theme.Spacing.md) {
                 Image(systemName: confIcon(o)).font(.system(size: 52)).foregroundStyle(confTint(o))
-                Text(confTitle(o)).font(.title2.weight(.semibold)).foregroundStyle(Theme.ink)
+                Text(confTitle(o)).font(.kloveSerifHeading).foregroundStyle(Theme.ink).multilineTextAlignment(.center)
                 Text("\(o.title)\(o.provider.map { " with \($0)" } ?? "")")
-                    .font(.subheadline).foregroundStyle(Theme.ink).multilineTextAlignment(.center)
+                    .font(.kloveBody).foregroundStyle(Theme.ink).multilineTextAlignment(.center)
                 // Confirm WHO it's for and WHICH coverage Klove will give the office.
                 Label("For \(o.patientName ?? memberName)", systemImage: "person.fill")
-                    .font(.caption).foregroundStyle(Theme.inkSecondary)
+                    .font(.kloveCaption).foregroundStyle(Theme.inkSecondary)
                 if let ins = o.insurance, !ins.isEmpty {
                     Label("Insurance: \(ins)", systemImage: "creditcard")
-                        .font(.caption).foregroundStyle(Theme.inkSecondary)
+                        .font(.kloveCaption).foregroundStyle(Theme.inkSecondary)
                 }
 
                 if o.isNeedsInfo {
                     // Klove reached no office — be honest: nothing is booked. No "Klove is on it" here.
                     Text("Klove couldn't reach an office to book this yet, so nothing is scheduled. It's saved to Actions — add a phone or website, or pick a provider, to finish.")
-                        .font(.caption).foregroundStyle(Theme.inkSecondary).multilineTextAlignment(.center).padding(.top, 4)
+                        .font(.kloveCaption).foregroundStyle(Theme.inkSecondary).multilineTextAlignment(.center).padding(.top, Theme.Spacing.xs)
                 } else if let sid = o.sessionId {
                     // A live booking job is in flight — watch it reach the office. The confirmation (or a
                     // demo label, for a simulated run) appears in the live card and in Today once it lands.
                     Text("Watch Klove reach the office below — you'll also find this in Today & Actions.")
-                        .font(.caption).foregroundStyle(Theme.inkSecondary).multilineTextAlignment(.center).padding(.top, 4)
-                    SessionLiveCard(sessionId: sid).padding(.top, 8)
+                        .font(.kloveCaption).foregroundStyle(Theme.inkSecondary).multilineTextAlignment(.center).padding(.top, Theme.Spacing.xs)
+                    SessionLiveCard(sessionId: sid).padding(.top, Theme.Spacing.sm)
                 } else {
                     Text("Klove is working on this — you'll find updates in Today & Actions.")
-                        .font(.caption).foregroundStyle(Theme.inkSecondary).multilineTextAlignment(.center).padding(.top, 4)
+                        .font(.kloveCaption).foregroundStyle(Theme.inkSecondary).multilineTextAlignment(.center).padding(.top, Theme.Spacing.xs)
                 }
             }
-            .padding(24)
+            .padding(Theme.Spacing.xl)
             .frame(maxWidth: .infinity)
         }
-        .background(Theme.background.ignoresSafeArea())
+        .kloveBackground()
     }
 
     private func confTitle(_ o: BookingOutcome) -> String {
