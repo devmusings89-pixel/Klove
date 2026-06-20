@@ -235,6 +235,8 @@ struct MessageView: View {
             }
         case let .bookingRecap(recap):
             recapCard(recap)
+        case let .bookingStatus(sessionId, _, _):
+            SessionLiveCard(sessionId: sessionId)   // live call progress: calling → booked / no-answer fallback
         case let .prepList(title, questions):
             VStack(alignment: .leading, spacing: 6) {
                 if !title.isEmpty { Text(title).font(.kloveBodyStrong).foregroundStyle(Theme.ink) }

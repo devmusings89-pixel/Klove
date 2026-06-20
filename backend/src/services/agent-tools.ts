@@ -27,6 +27,7 @@ export interface BookingRecap {
 export type AgentCard =
   | { type: "physician_list"; resolvedSpecialty: string | null; memberInsurance: string[]; results: PhysicianResult[] }
   | { type: "booking_recap"; recap: BookingRecap }
+  | { type: "booking_status"; sessionId: string; provider?: string; reason?: string }
   | { type: "prep_list"; title: string; questions: string[] }
   | { type: "text"; text: string };
 

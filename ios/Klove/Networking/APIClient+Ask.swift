@@ -34,11 +34,12 @@ struct BookingRecap: Decodable, Hashable {
 enum AgentCard: Decodable {
     case physicianList(resolvedSpecialty: String?, memberInsurance: [String], results: [PhysicianResult])
     case bookingRecap(BookingRecap)
+    case bookingStatus(sessionId: String, provider: String?, reason: String?)
     case prepList(title: String, questions: [String])
     case text(String)
     case unknown
 
-    private enum K: String, CodingKey { case type, resolvedSpecialty, memberInsurance, results, recap, title, questions, text }
+    private enum K: String, CodingKey { case type, resolvedSpecialty, memberInsurance, results, recap, sessionId, provider, reason, title, questions, text }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: K.self)
@@ -51,6 +52,10 @@ enum AgentCard: Decodable {
             )
         case "booking_recap":
             self = .bookingRecap(try c.decode(BookingRecap.self, forKey: .recap))
+        case "booking_status":
+            self = .bookingStatus(sessionId: try c.decode(String.self, forKey: .sessionId),
+                                  provider: try c.decodeIfPresent(String.self, forKey: .provider),
+                                  reason: try c.decodeIfPresent(String.self, forKey: .reason))
         case "prep_list":
             self = .prepList(title: try c.decodeIfPresent(String.self, forKey: .title) ?? "",
                              questions: try c.decodeIfPresent([String].self, forKey: .questions) ?? [])

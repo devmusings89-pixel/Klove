@@ -233,7 +233,12 @@ async function runPending(operatorUserId: string, action: ProposedAction): Promi
     where: { subjectUserId: action.subjectUserId, kind: { in: ["book", "choose_time", "reminder"] } },
     orderBy: { createdAt: "desc" },
   });
-  return { kind: "escalated", routedTo: "concierge", answer, taskId: task?.id ?? undefined };
+  // For a live booking, attach a status card so the chat shows the call progressing in real time.
+  const cards: AgentCard[] = [];
+  if (action.tool === "book_appointment" && task?.conciergeJobId) {
+    cards.push({ type: "booking_status", sessionId: task.conciergeJobId, provider: optStr(action.args.provider), reason: optStr(action.args.reason) });
+  }
+  return { kind: "escalated", routedTo: "concierge", answer, taskId: task?.id ?? undefined, cards: cards.length ? cards : undefined };
 }
 
 /** Confirm the pending in-app proposal (the Confirm button → POST /ask/confirm). */
@@ -283,7 +288,7 @@ async function executeAction(operatorUserId: string, action: ProposedAction, ori
       const provider = str(action.args.provider);
       await audit(operatorUserId, action.subjectUserId, "booking_authorized", `WhatsApp booking: ${reason}`);
       if (outcome.status === "in_progress") {
-        return `On it — I'm contacting ${provider ?? "the office"} to book ${reason}. I'll message you the moment it's confirmed.`;
+        return `On it — I'm calling ${provider ?? "the office"} now to book ${reason}. You'll see live progress below, and I'll confirm here the moment it's booked. If they don't pick up, I'll flag it in your Actions with their number so we can finish it.`;
       }
       // needs_info: couldn't reach an office — no fake hold; the task tracks the follow-up.
       return `I couldn't reach an office to book ${reason} automatically — I've added it to your Actions so we can finish it (add a phone/website or pick a provider).`;
