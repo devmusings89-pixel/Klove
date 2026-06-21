@@ -170,11 +170,31 @@ async function advance(page: Page, ctx: BookingContext, transcript: string[], no
       continue;
     }
     if (nextBtn) {
+      // These multi-step screens block "Next" until the step's choice is picked. Select the sensible
+      // default first (book for the patient; keep insurance as-is since it's on file).
+      await clickByText(page, /booking myself|for myself|^myself$/i).catch(() => {});
+      await clickByText(page, /insurance unchanged|same insurance|no changes/i).catch(() => {});
+
       const before = page.url() + body.slice(0, 80);
-      await clickByText(page, /^next$|continue/i);
-      await page.waitForTimeout(2500);
-      const now = page.url() + (await page.evaluate(() => document.body.innerText)).slice(0, 80);
-      if (now === before) {
+      let advanced = false;
+      for (let tryN = 0; tryN < 3 && !advanced; tryN++) {
+        await clickByText(page, /^next$|continue/i);
+        await page.waitForTimeout(2500 + tryN * 1500); // dynamic forms sometimes need a beat to validate
+        const now = page.url() + (await page.evaluate(() => document.body.innerText)).slice(0, 80);
+        if (now !== before) advanced = true;
+      }
+      if (!advanced) {
+        const dump = await page.evaluate(() => {
+          const fields = Array.from(document.querySelectorAll("input,select,textarea")).map((el) => {
+            const e = el as HTMLInputElement;
+            return `${e.tagName}#${e.id || ""}[name=${e.name || ""}][type=${e.type || ""}]${e.required ? "*REQ" : ""} ph="${(e as HTMLInputElement).placeholder || ""}" val="${(e.value || "").slice(0, 24)}"`;
+          });
+          const errs = Array.from(document.querySelectorAll('[class*="error" i],[class*="invalid" i],[role="alert"],.help-block'))
+            .map((e) => (e as HTMLElement).innerText?.trim()).filter(Boolean);
+          return { fields, errs };
+        }).catch(() => ({ fields: [], errs: [] }));
+        transcript.push("FORM_FIELDS: " + JSON.stringify(dump.fields));
+        transcript.push("FORM_ERRORS: " + JSON.stringify(dump.errs));
         return { outcome: "info_needed", missingInfo: ["A required field on the booking form could not be completed"], summary: "Form validation blocked progress.", transcript: transcript.join("\n") };
       }
       continue;
